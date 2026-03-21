@@ -16975,3 +16975,1998 @@ export const ProductionAPI = {
 ---
 
 *Part 01 of 8 — [← Back to Part README](./README.md) · [← Main README](../README.md)*
+
+## Section 9: Expo vs CLI (Q341–Q370)
+
+---
+
+### Q341. What is the difference between Expo Managed, Expo Bare, and React Native CLI?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Expo vs CLI
+
+**Answer:**
+
+| | Expo Managed | Expo Bare | React Native CLI |
+|--|-------------|-----------|-----------------|
+| Native code visible | ❌ Hidden | ✅ Exposed | ✅ Exposed |
+| Custom native modules | ❌ Not allowed | ✅ Allowed | ✅ Allowed |
+| Expo SDK | ✅ Full access | ✅ Full access | ⚠️ Most work |
+| OTA updates | ✅ Built-in | ✅ via EAS Update | ⚠️ Manual |
+| Build service | ✅ EAS Build | ✅ EAS Build | ⚠️ Manual / CI |
+| Flexibility | Low | High | Highest |
+| Setup time | Minutes | Hours | Hours |
+
+```bash
+# Expo Managed — no ios/ or android/ folders
+npx create-expo-app MyApp
+# app.json configures native behaviour
+
+# Expo Bare — has ios/ and android/ but uses Expo SDK
+npx create-expo-app MyApp --template bare-minimum
+# OR eject from managed:
+npx expo prebuild
+
+# React Native CLI — full native control
+npx @react-native-community/cli@latest init MyApp
+```
+
+**When to use each:**
+- **Managed:** Prototypes, demos, apps with standard features only, solo developer
+- **Bare:** Production apps that need custom native code + Expo SDK convenience
+- **CLI:** Existing native codebases, specific native SDK integrations, max control
+
+**Follow-up:** Can you add a custom native module to a Managed Expo app? → No, managed workflow apps run inside the Expo Go sandbox which doesn't support arbitrary native code. You must eject to bare (run `npx expo prebuild`) to add custom native modules.
+
+---
+
+### Q342. What is `expo prebuild` and what does it do?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Expo
+
+**Answer:**
+`expo prebuild` generates the native `ios/` and `android/` directories from your `app.json` / `app.config.js` configuration and the Expo SDK. It's the bridge between managed and bare workflow.
+
+```bash
+# Generate native projects from app.json config
+npx expo prebuild
+
+# Clean and regenerate (discards manual native changes)
+npx expo prebuild --clean
+
+# Platform-specific
+npx expo prebuild --platform ios
+npx expo prebuild --platform android
+```
+
+```json
+// app.json — configures what prebuild generates
+{
+  "expo": {
+    "name": "My ERP App",
+    "slug": "my-erp-app",
+    "version": "1.0.0",
+    "ios": {
+      "bundleIdentifier": "com.yourcompany.erp",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Scan QR codes for attendance",
+        "NSFaceIDUsageDescription": "Authenticate with Face ID"
+      },
+      "entitlements": {
+        "com.apple.developer.associated-domains": ["applinks:yourapp.com"]
+      }
+    },
+    "android": {
+      "package": "com.yourcompany.erp",
+      "versionCode": 1,
+      "permissions": ["CAMERA", "ACCESS_FINE_LOCATION"],
+      "googleServicesFile": "./google-services.json"
+    },
+    "plugins": [
+      "expo-camera",
+      "expo-location",
+      ["expo-notifications", { "icon": "./assets/notification-icon.png" }]
+    ]
+  }
+}
+```
+
+**What prebuild generates:**
+- `ios/` — Xcode project, Podfile, Info.plist, entitlements
+- `android/` — Gradle files, AndroidManifest.xml, build.gradle
+- Installs CocoaPods automatically
+- Applies config plugins from `app.json`
+
+**Important:** Running `prebuild --clean` deletes and regenerates native folders — **do not** keep manual native changes that aren't in a config plugin or they'll be lost.
+
+---
+
+### Q343. What are Expo Config Plugins?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Expo Config Plugins
+
+**Answer:**
+Config plugins are JavaScript functions that modify native project files during `expo prebuild`. They're the Expo way to add native configuration without manually editing Xcode/Android Studio files.
+
+```js
+// app.config.js — using existing plugins
+export default {
+  expo: {
+    plugins: [
+      // Simple plugin (no config)
+      "expo-camera",
+
+      // Plugin with options
+      ["expo-notifications", {
+        icon: "./assets/notif-icon.png",
+        color: "#ffffff",
+        sounds: ["./assets/notification.wav"],
+      }],
+
+      // Custom inline config plugin
+      (config) => {
+        // Modify iOS Info.plist
+        config.modResults.ios.infoPlist = {
+          ...config.modResults.ios.infoPlist,
+          NSBluetoothAlwaysUsageDescription: "Used for BLE attendance scanning",
+        };
+        return config;
+      },
+    ],
+  },
+};
+```
+
+```js
+// Writing a custom config plugin (plugins/withCustomAndroidPermission.js)
+const { withAndroidManifest } = require('@expo/config-plugins');
+
+const withBluetoothPermissions = (config) => {
+  return withAndroidManifest(config, async (config) => {
+    const androidManifest = config.modResults;
+    const mainApplication = androidManifest.manifest.application[0];
+
+    // Add uses-permission to AndroidManifest.xml
+    const permissions = androidManifest.manifest['uses-permission'] || [];
+    const needed = [
+      'android.permission.BLUETOOTH',
+      'android.permission.BLUETOOTH_SCAN',
+      'android.permission.BLUETOOTH_CONNECT',
+    ];
+
+    needed.forEach(perm => {
+      if (!permissions.some(p => p.$['android:name'] === perm)) {
+        permissions.push({ $: { 'android:name': perm } });
+      }
+    });
+
+    androidManifest.manifest['uses-permission'] = permissions;
+    return config;
+  });
+};
+
+module.exports = withBluetoothPermissions;
+```
+
+```js
+// app.config.js — use custom plugin
+const withBluetoothPermissions = require('./plugins/withCustomAndroidPermission');
+
+export default {
+  expo: {
+    plugins: [withBluetoothPermissions],
+  },
+};
+```
+
+**Available mod types:**
+- `withInfoPlist` — iOS Info.plist
+- `withAndroidManifest` — AndroidManifest.xml
+- `withAppBuildGradle` — app/build.gradle
+- `withProjectBuildGradle` — root build.gradle
+- `withPodfile` — iOS Podfile
+- `withMainApplication` — MainApplication.java/kt
+- `withMainActivity` — MainActivity.java/kt
+
+---
+
+### Q344. What is EAS Build and how does it work?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** EAS Build
+
+**Answer:**
+EAS Build (Expo Application Services Build) is Expo's cloud build service. It builds iOS and Android apps on Expo's servers — no need for a Mac to build iOS.
+
+```bash
+# Install EAS CLI
+npm install -g eas-cli
+
+# Login
+eas login
+
+# Configure (creates eas.json)
+eas build:configure
+
+# Build for development (debug build with dev client)
+eas build --platform android --profile development
+eas build --platform ios --profile development
+
+# Build for TestFlight / internal testing
+eas build --platform ios --profile preview
+
+# Build for production (Play Store / App Store)
+eas build --platform all --profile production
+
+# Check build status
+eas build:list
+```
+
+```json
+// eas.json — build profiles
+{
+  "cli": { "version": ">= 5.0.0" },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": { "buildType": "apk" },
+      "ios": { "simulator": false }
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": { "buildType": "apk" },
+      "ios": {
+        "distribution": "internal",
+        "enterpriseProvisioning": "adhoc"
+      }
+    },
+    "production": {
+      "android": {
+        "buildType": "app-bundle"  // .aab for Play Store
+      },
+      "ios": {
+        "distribution": "store"   // .ipa for App Store
+      },
+      "env": {
+        "APP_ENV": "production",
+        "API_URL": "https://api.yourapp.com"
+      }
+    }
+  },
+  "submit": {
+    "production": {
+      "android": {
+        "serviceAccountKeyPath": "./pc-api-key.json",
+        "track": "internal"
+      },
+      "ios": {
+        "appleId": "developer@yourcompany.com",
+        "ascAppId": "1234567890",
+        "appleTeamId": "XXXXXXXXXX"
+      }
+    }
+  }
+}
+```
+
+**How it works:**
+1. EAS CLI uploads your source code + secrets to Expo's servers
+2. A build worker clones your repo in an isolated environment
+3. iOS: macOS runner with Xcode → produces `.ipa`
+4. Android: Ubuntu runner with Gradle → produces `.apk` or `.aab`
+5. Signed artifact available for download or auto-submitted to stores
+
+---
+
+### Q345. What is EAS Update and how does it differ from EAS Build?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** EAS Update / OTA
+
+**Answer:**
+| | EAS Build | EAS Update |
+|--|-----------|-----------|
+| What it produces | Native binary (.ipa/.apk/.aab) | JS bundle + assets |
+| When it runs | When native code changes | When JS/assets change |
+| Delivery | App Store / Play Store | Over-the-air (OTA) |
+| User action | Full app update (install) | Silent background update |
+| Time to users | Days (store review) | Minutes |
+| What it can change | Everything | JS, assets only — NOT native |
+
+```bash
+# Install EAS Update
+npx expo install expo-updates
+
+# Configure
+eas update:configure
+
+# Publish an update
+eas update --branch production --message "Fix login bug"
+
+# Publish to specific branch
+eas update --branch staging --message "New feature for QA"
+```
+
+```js
+// app.json — configure updates
+{
+  "expo": {
+    "updates": {
+      "url": "https://u.expo.dev/your-project-id",
+      "checkAutomatically": "ON_LOAD",  // ON_LOAD, ON_ERROR_RECOVERY, WIFI_ONLY
+      "fallbackToCacheTimeout": 3000    // ms to wait before using cached bundle
+    },
+    "runtimeVersion": {
+      "policy": "sdkVersion"  // fingerprint, sdkVersion, nativeVersion, appVersion
+    }
+  }
+}
+```
+
+```js
+// Manual update check in app
+import * as Updates from 'expo-updates';
+
+const checkForUpdate = async () => {
+  if (__DEV__) return; // no OTA in development
+
+  try {
+    const update = await Updates.checkForUpdateAsync();
+    if (update.isAvailable) {
+      await Updates.fetchUpdateAsync();
+      await Updates.reloadAsync(); // restart with new bundle
+    }
+  } catch (error) {
+    console.error('OTA update failed:', error);
+  }
+};
+
+// Soft update — notify user
+const handleUpdate = async () => {
+  const update = await Updates.checkForUpdateAsync();
+  if (update.isAvailable) {
+    Alert.alert(
+      'Update available',
+      'A new version is ready. Reload now?',
+      [
+        { text: 'Later' },
+        { text: 'Reload', onPress: async () => {
+          await Updates.fetchUpdateAsync();
+          Updates.reloadAsync();
+        }},
+      ]
+    );
+  }
+};
+```
+
+---
+
+### Q346. What is Expo Go and what are its limitations?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Expo Go
+
+**Answer:**
+Expo Go is a free app on the App Store and Play Store that lets you run your Expo project on a device without building a binary. You scan a QR code and the app loads instantly.
+
+```bash
+# Start dev server for Expo Go
+npx expo start
+# Scan QR code with Expo Go app on device
+```
+
+**Limitations of Expo Go:**
+
+```
+1. No custom native modules
+   → Only Expo SDK modules included in Expo Go are available
+   → react-native-razorpay, custom native modules WON'T work
+
+2. Fixed Expo SDK version
+   → Expo Go ships with a specific SDK version
+   → If you use SDK 51, you need Expo Go that supports SDK 51
+
+3. No custom native build configuration
+   → Can't test custom Info.plist keys, custom permissions, etc.
+
+4. Can't simulate push notifications
+   → Expo Go uses its own push token, not your app's
+
+5. Not suitable for production debugging
+   → Production builds behave differently (Hermes enabled, no debugger)
+
+6. Can't test in-app purchases
+   → IAP requires a signed app build
+
+7. Limited background execution
+   → Background tasks not fully supported
+
+8. No custom URL schemes
+   → Deep linking works differently in Expo Go vs standalone
+```
+
+**Alternative: Expo Dev Client (Development Build)**
+```bash
+# Create a development build — your own app + Expo dev tools
+eas build --profile development --platform android
+# Install on device → opens your custom dev client
+# Supports ALL your native modules + Expo dev experience
+```
+
+---
+
+### Q347. What is a Development Build in Expo?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Expo Dev Client
+
+**Answer:**
+A Development Build is a custom version of Expo Go that includes your app's native code. It replaces Expo Go for development — giving you the Expo dev experience (hot reload, DevTools) while supporting your custom native modules.
+
+```bash
+# Install expo-dev-client
+npx expo install expo-dev-client
+
+# Build dev client (once, when native deps change)
+eas build --profile development --platform android
+# OR locally:
+npx expo run:android  # builds and installs debug APK
+
+# Start dev server (dev client connects to it)
+npx expo start --dev-client
+# OR
+npx expo start  # auto-detects dev client
+
+# Install the APK on device/emulator, then scan QR
+```
+
+```json
+// eas.json — development profile
+{
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleDebug"
+      },
+      "ios": {
+        "buildConfiguration": "Debug",
+        "simulator": true   // for simulator testing
+      }
+    }
+  }
+}
+```
+
+**Workflow:**
+```
+1. Add native dependency → npx expo install some-native-lib
+2. Build new dev client → eas build --profile development
+3. Install on device (once per native change)
+4. Develop JS freely → fast refresh, no rebuild needed
+5. Add another native dep? → rebuild dev client
+```
+
+**Key difference from Expo Go:**
+- Expo Go = Expo's generic sandbox (fixed modules)
+- Dev Client = YOUR app's sandbox (your custom native modules)
+
+---
+
+### Q348. How do you handle environment variables in Expo?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Expo Configuration
+
+**Answer:**
+```bash
+# Method 1: .env files (Expo SDK 49+)
+# .env
+EXPO_PUBLIC_API_URL=https://api.dev.yourapp.com
+EXPO_PUBLIC_RAZORPAY_KEY=rzp_test_xxxxxxxx
+
+# .env.production
+EXPO_PUBLIC_API_URL=https://api.yourapp.com
+EXPO_PUBLIC_RAZORPAY_KEY=rzp_live_xxxxxxxx
+```
+
+```js
+// Access with EXPO_PUBLIC_ prefix (bundled into JS — visible to users)
+const apiUrl = process.env.EXPO_PUBLIC_API_URL;
+const razorpayKey = process.env.EXPO_PUBLIC_RAZORPAY_KEY;
+
+// ⚠️ NEVER put secrets in EXPO_PUBLIC_ variables
+// They're embedded in the JS bundle — users can extract them
+```
+
+```js
+// Method 2: app.config.js with dynamic config (recommended for secrets)
+// app.config.js
+export default ({ config }) => ({
+  ...config,
+  extra: {
+    apiUrl: process.env.API_URL || 'http://localhost:3000',
+    environment: process.env.APP_ENV || 'development',
+    // Server-side secret — NOT included in JS bundle
+    // sentryDsn: process.env.SENTRY_DSN  ← use EAS Secrets instead
+  },
+  hooks: {
+    postPublish: [
+      {
+        file: 'sentry-expo/upload-sourcemaps',
+        config: {
+          organization: 'your-org',
+          project: 'your-project',
+          authToken: process.env.SENTRY_AUTH_TOKEN, // build-time only
+        },
+      },
+    ],
+  },
+});
+
+// Read in app:
+import Constants from 'expo-constants';
+const { apiUrl } = Constants.expoConfig.extra;
+```
+
+```bash
+# Method 3: EAS Secrets (truly secret — injected at build time)
+eas secret:create --scope project --name SENTRY_DSN --value "https://xxx@sentry.io/xxx"
+eas secret:create --scope project --name API_KEY --value "secret-key-value"
+
+# Secrets are available as process.env.SENTRY_DSN in eas.json env block
+# NOT in the JS bundle — only available during build
+```
+
+```json
+// eas.json — reference secrets in build env
+{
+  "build": {
+    "production": {
+      "env": {
+        "SENTRY_DSN": "$SENTRY_DSN",      // from EAS Secrets
+        "APP_ENV": "production",
+        "API_URL": "https://api.yourapp.com"
+      }
+    }
+  }
+}
+```
+
+---
+
+### Q349. What is `app.json` vs `app.config.js` in Expo?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Expo Configuration
+
+**Answer:**
+```json
+// app.json — static configuration (JSON, no logic)
+{
+  "expo": {
+    "name": "My App",
+    "version": "1.0.0",
+    "icon": "./assets/icon.png",
+    "platforms": ["ios", "android"],
+    "ios": {
+      "bundleIdentifier": "com.company.app",
+      "buildNumber": "1"
+    },
+    "android": {
+      "package": "com.company.app",
+      "versionCode": 1
+    }
+  }
+}
+```
+
+```js
+// app.config.js — dynamic configuration (JavaScript, supports logic)
+// Replaces app.json — more powerful
+import 'dotenv/config';
+
+export default ({ config }) => {
+  // Spread the base config from app.json if it exists
+  const isProduction = process.env.APP_ENV === 'production';
+
+  return {
+    ...config,
+    name: isProduction ? 'My App' : 'My App (Dev)',
+    ios: {
+      ...config.ios,
+      bundleIdentifier: isProduction
+        ? 'com.company.app'
+        : 'com.company.app.dev',
+      buildNumber: String(process.env.BUILD_NUMBER || '1'),
+    },
+    android: {
+      ...config.android,
+      package: isProduction ? 'com.company.app' : 'com.company.app.dev',
+      versionCode: parseInt(process.env.VERSION_CODE || '1'),
+      googleServicesFile: isProduction
+        ? './google-services-prod.json'
+        : './google-services-dev.json',
+    },
+    extra: {
+      apiUrl: process.env.API_URL,
+      environment: process.env.APP_ENV || 'development',
+      eas: { projectId: 'your-eas-project-id' },
+    },
+    updates: {
+      url: 'https://u.expo.dev/your-project-id',
+    },
+    runtimeVersion: {
+      policy: process.env.APP_ENV === 'production' ? 'fingerprint' : 'sdkVersion',
+    },
+  };
+};
+```
+
+**Key differences:**
+- `app.json` = static, committed to git, no secrets
+- `app.config.js` = dynamic, can read env vars, can have logic, can merge from multiple sources
+
+---
+
+### Q350. What is the Expo SDK and what modules does it include?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Expo SDK
+
+**Answer:**
+The Expo SDK is a collection of well-maintained React Native libraries that cover common app functionality. Each package is prefixed with `expo-`.
+
+```bash
+# Install Expo SDK packages (use npx expo install — ensures compatible version)
+npx expo install expo-camera        # Camera access
+npx expo install expo-location      # GPS + geolocation
+npx expo install expo-notifications # Push + local notifications
+npx expo install expo-auth-session  # OAuth (Google, Facebook, Apple)
+npx expo install expo-secure-store  # Keychain / Keystore wrapper
+npx expo install expo-file-system   # File I/O
+npx expo install expo-image-picker  # Photo library + camera picker
+npx expo install expo-av            # Audio + video playback
+npx expo install expo-font          # Custom font loading
+npx expo install expo-splash-screen # Splash screen control
+npx expo install expo-updates       # OTA updates
+npx expo install expo-constants     # App constants (version, etc.)
+npx expo install expo-device        # Device info
+npx expo install expo-haptics       # Haptic feedback
+npx expo install expo-clipboard     # Copy/paste
+npx expo install expo-share         # Native share sheet
+npx expo install expo-web-browser   # In-app browser (OAuth)
+npx expo install expo-linear-gradient # Gradient views
+npx expo install expo-blur          # Blur view
+npx expo install expo-contacts      # Contacts access
+npx expo install expo-calendar      # Calendar events
+npx expo install expo-sensors       # Accelerometer, gyroscope
+npx expo install expo-barcode-scanner # QR code scanner
+```
+
+```js
+// Example: expo-secure-store (Keychain/Keystore wrapper)
+import * as SecureStore from 'expo-secure-store';
+
+await SecureStore.setItemAsync('authToken', 'jwt-token-here');
+const token = await SecureStore.getItemAsync('authToken');
+await SecureStore.deleteItemAsync('authToken');
+
+// Example: expo-notifications (local)
+import * as Notifications from 'expo-notifications';
+
+await Notifications.scheduleNotificationAsync({
+    content: {
+        title: "Attendance Reminder",
+        body: "Don't forget to mark your attendance!",
+        data: { screen: 'attendance' },
+    },
+    trigger: { hour: 9, minute: 0, repeats: true }, // every day at 9 AM
+});
+```
+
+**Why use `npx expo install` not `npm install`?**
+→ `npx expo install` picks the exact version compatible with your Expo SDK version. `npm install` may pick an incompatible version causing hard-to-debug issues.
+
+---
+
+### Q351. How do you migrate from Expo Managed to Bare workflow?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Expo Migration
+
+**Answer:**
+```bash
+# The official migration command
+npx expo prebuild
+
+# This generates ios/ and android/ directories
+# Your app.json config is translated to native config files
+
+# After prebuild:
+# Install pods (iOS)
+cd ios && pod install && cd ..
+
+# Verify the build works
+npx expo run:ios
+npx expo run:android
+
+# Clean prebuild (regenerate from scratch)
+npx expo prebuild --clean
+```
+
+**Post-migration checklist:**
+```bash
+# 1. Add ios/ and android/ to .gitignore? No — commit them!
+#    (They're now part of your project, not generated artifacts)
+#    Unless you use CNG (Continuous Native Generation) with prebuild --clean
+
+# 2. Update CI/CD pipeline
+#    Old: EAS Build handles everything
+#    New: May need fastlane, or keep using EAS Build (still works with bare)
+
+# 3. Test all Expo SDK modules still work
+#    npx expo install doesn't change — same commands
+#    But now native linking is handled by autolinking + pod install
+
+# 4. Add custom native module
+#    Now you can add NativeModules in ios/ and android/
+#    No more "this module requires native code" errors
+
+# 5. Update README with new setup steps
+#    cd ios && pod install (iOS devs)
+#    No changes for Android (gradle handles it)
+```
+
+**When NOT to migrate:**
+- You don't need custom native code
+- Team has no iOS/Android native experience
+- You rely on Expo Go for quick client demos
+
+---
+
+### Q352. What is `expo-dev-client` vs `expo-go`?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Expo Dev Tools
+
+**Answer:**
+
+| | Expo Go | expo-dev-client |
+|--|---------|----------------|
+| What it is | Expo's generic sandbox app | Your custom dev sandbox |
+| Custom native modules | ❌ Not supported | ✅ Fully supported |
+| Native dependencies | Fixed (Expo SDK only) | Whatever you install |
+| Rebuild needed | Never (it's a store app) | When native deps change |
+| Distribution | App Store / Play Store | Internal (side-load) |
+| Dev menu | ✅ Expo dev menu | ✅ Expo dev menu |
+| Fast refresh | ✅ | ✅ |
+| Remote debugging | ✅ | ✅ |
+
+```bash
+# Setup expo-dev-client
+npx expo install expo-dev-client
+
+# Build dev client (once)
+# Local build (faster, requires Xcode/Android Studio)
+npx expo run:ios --device
+npx expo run:android --device
+
+# Cloud build (no Xcode/Android Studio required)
+eas build --profile development --platform ios
+
+# Start dev server (dev client connects automatically)
+npx expo start --dev-client
+```
+
+```js
+// expo-dev-client adds a custom dev menu with:
+// - Reload JavaScript
+// - Open JS Debugger
+// - Toggle Performance Monitor
+// - Toggle Element Inspector
+// - Your own custom dev menu items
+
+// Add custom dev menu items
+import { registerDevMenuItems } from 'expo-dev-client';
+
+registerDevMenuItems([
+    {
+        name: 'Clear AsyncStorage',
+        callback: async () => {
+            await AsyncStorage.clear();
+            alert('AsyncStorage cleared!');
+        },
+    },
+    {
+        name: 'Reset to Onboarding',
+        callback: () => navigationRef.current?.reset({ index: 0, routes: [{ name: 'Onboarding' }] }),
+    },
+]);
+```
+
+---
+
+### Q353. What is EAS Submit and how do you automate app store uploads?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** EAS Submit
+
+**Answer:**
+EAS Submit automates uploading your built `.ipa` / `.aab` to App Store Connect and Google Play Console.
+
+```bash
+# Submit latest build
+eas submit --platform ios
+eas submit --platform android
+
+# Submit a specific build by ID
+eas submit --platform ios --id <build-id>
+
+# Submit production build (auto-submit after build)
+eas build --platform all --profile production --auto-submit
+```
+
+```json
+// eas.json — submit configuration
+{
+  "submit": {
+    "production": {
+      "ios": {
+        "appleId": "developer@yourcompany.com",
+        "ascAppId": "1234567890",        // App Store Connect App ID
+        "appleTeamId": "XXXXXXXXXX",
+        "bundleIdentifier": "com.company.app"
+      },
+      "android": {
+        "serviceAccountKeyPath": "./pc-api-key.json",  // Google Play API key
+        "track": "internal",            // internal, alpha, beta, production
+        "releaseStatus": "completed"    // draft, completed
+      }
+    }
+  }
+}
+```
+
+```bash
+# Apple credentials setup
+eas credentials --platform ios
+# EAS manages provisioning profiles and certificates automatically
+
+# Google Play setup:
+# 1. Create service account in Google Play Console
+# 2. Download JSON key
+# 3. Grant service account access in Play Console
+# 4. Path it in eas.json serviceAccountKeyPath
+
+# Full automated pipeline:
+# 1. git push to main
+# 2. CI/CD detects push
+# 3. eas build --profile production --auto-submit
+# 4. Build → sign → upload to store → review
+```
+
+---
+
+### Q354. What is the `runtimeVersion` in EAS Update?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** EAS Update
+
+**Answer:**
+`runtimeVersion` is a string that identifies the **native binary compatibility** of an OTA update. An update is only delivered to devices whose native binary has the matching `runtimeVersion`. This prevents delivering a JS update that requires a newer native module to an old binary.
+
+```json
+// app.json — runtimeVersion policies
+{
+  "expo": {
+    "runtimeVersion": {
+      "policy": "sdkVersion"
+      // "sdkVersion"     — uses Expo SDK version (e.g., "50.0.0")
+      //                    update delivered to all devices with same SDK
+      // "appVersion"     — uses app.json version (e.g., "1.2.0")
+      //                    change version to break compatibility
+      // "nativeVersion"  — concatenates iOS buildNumber + Android versionCode
+      // "fingerprint"    — hash of all native dependencies (most precise)
+      //                    automatically changes when any native dep changes
+    }
+  }
+}
+```
+
+```bash
+# fingerprint policy — recommended for production
+# Computes a hash of:
+# - package.json native dependencies
+# - android/ and ios/ native files
+# - expo-modules configuration
+# - Any native code change → new fingerprint → old binaries won't get update
+
+# Set explicit runtime version
+# (useful for coordinating updates across a staged rollout)
+eas update --branch production --runtime-version "1.2.0"
+```
+
+```
+Timeline example with fingerprint policy:
+
+Build 1.0 (fingerprint: abc123)
+    ↓
+OTA Update A → targets abc123 → delivered to Build 1.0 ✅
+OTA Update B → targets abc123 → delivered to Build 1.0 ✅
+
+New native dep added → rebuild
+Build 1.1 (fingerprint: xyz789)
+    ↓
+OTA Update C → targets xyz789 → NOT delivered to Build 1.0 ✅ (correct)
+                               → delivered to Build 1.1 ✅
+```
+
+---
+
+### Q355. How do you handle multiple environments (dev/staging/prod) with Expo?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Very High | **Category:** Expo Configuration
+
+**Answer:**
+```js
+// app.config.js — environment-aware config
+const ENV = process.env.APP_ENV || 'development';
+
+const envConfig = {
+  development: {
+    name: 'My App (Dev)',
+    bundleId: 'com.company.app.dev',
+    package: 'com.company.app.dev',
+    apiUrl: 'http://localhost:3000',
+    icon: './assets/icon-dev.png',
+  },
+  staging: {
+    name: 'My App (Staging)',
+    bundleId: 'com.company.app.staging',
+    package: 'com.company.app.staging',
+    apiUrl: 'https://api.staging.yourapp.com',
+    icon: './assets/icon-staging.png',
+  },
+  production: {
+    name: 'My App',
+    bundleId: 'com.company.app',
+    package: 'com.company.app',
+    apiUrl: 'https://api.yourapp.com',
+    icon: './assets/icon.png',
+  },
+};
+
+const env = envConfig[ENV] || envConfig.development;
+
+export default {
+  expo: {
+    name: env.name,
+    slug: 'my-app',
+    version: '1.0.0',
+    icon: env.icon,
+    ios: {
+      bundleIdentifier: env.bundleId,
+    },
+    android: {
+      package: env.package,
+    },
+    extra: {
+      apiUrl: env.apiUrl,
+      environment: ENV,
+    },
+    updates: {
+      url: 'https://u.expo.dev/your-project-id',
+    },
+  },
+};
+```
+
+```json
+// eas.json — build profiles per environment
+{
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "env": { "APP_ENV": "development" }
+    },
+    "staging": {
+      "distribution": "internal",
+      "env": {
+        "APP_ENV": "staging",
+        "API_URL": "https://api.staging.yourapp.com"
+      }
+    },
+    "production": {
+      "env": {
+        "APP_ENV": "production",
+        "API_URL": "https://api.yourapp.com"
+      }
+    }
+  }
+}
+```
+
+```bash
+# Build for specific environment
+APP_ENV=staging eas build --profile staging --platform android
+eas build --profile production --platform all
+
+# Local development with environment
+APP_ENV=staging npx expo start
+```
+
+---
+
+### Q356. What is Expo's Continuous Native Generation (CNG)?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Expo Architecture
+
+**Answer:**
+CNG is the practice of never committing `ios/` and `android/` folders — instead regenerating them via `expo prebuild` whenever needed. The native directories are treated as build artifacts, not source.
+
+```bash
+# .gitignore — CNG setup
+/ios
+/android
+# These are generated — not committed
+
+# Regenerate native projects:
+npx expo prebuild --clean   # always clean for CNG
+cd ios && pod install && cd ..
+
+# Typical CNG workflow:
+# 1. Developer changes app.config.js or adds npm package
+# 2. CI/CD runs: npx expo prebuild --clean
+# 3. CI/CD runs: eas build (uses freshly generated native)
+```
+
+**Benefits of CNG:**
+```
+✅ No merge conflicts in Xcode/Android Studio files
+✅ Native config is always derived from app.config.js (single source of truth)
+✅ Config plugins handle all native changes declaratively
+✅ Easy to upgrade Expo SDK (just change version, regenerate)
+✅ Less knowledge of native required — everything in JS config
+```
+
+**Drawbacks:**
+```
+❌ All native config MUST be expressible as config plugins
+❌ Complex native changes harder to implement without writing plugins
+❌ Prebuild takes time in CI
+❌ Can't make one-off manual native tweaks (they'd be overwritten)
+```
+
+```js
+// When CNG breaks down — config plugin needed for:
+// 1. Custom build.gradle changes
+// 2. Custom Podfile changes
+// 3. Custom AndroidManifest entries
+// 4. Custom Info.plist entries
+// These MUST be expressed as config plugins, not manual edits
+```
+
+---
+
+### Q357. How do you add a native module (non-Expo) to an Expo bare app?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Expo Bare + Native Modules
+
+**Answer:**
+```bash
+# 1. Install the package
+npm install react-native-razorpay
+
+# 2. Auto-linking handles most packages
+# Android: nothing needed — Gradle auto-links
+# iOS: run pod install
+cd ios && pod install && cd ..
+
+# 3. Rebuild (auto-linking changes native code)
+# Dev client rebuild needed:
+eas build --profile development --platform all
+# OR locally:
+npx expo run:ios
+npx expo run:android
+```
+
+```js
+// Verify the module is linked
+// Android: android/settings.gradle should include the module
+// iOS: ios/Podfile.lock should list the pod
+
+// If auto-linking doesn't work (older libraries):
+// react-native link react-native-old-module (deprecated but sometimes needed)
+```
+
+```bash
+# Packages that need config plugins (app.json entry):
+# expo-camera, expo-notifications, etc. → add to plugins array in app.json
+# Community packages with config plugins: react-native-permissions, etc.
+
+# Manual permissions (without config plugin):
+# Android: edit android/app/src/main/AndroidManifest.xml directly
+# iOS: edit ios/YourApp/Info.plist directly
+
+# Example: add permission manually (bare workflow)
+# ios/YourApp/Info.plist:
+# <key>NSLocationWhenInUseUsageDescription</key>
+# <string>Track attendance location</string>
+```
+
+```js
+// Verify native module is accessible
+import { NativeModules } from 'react-native';
+console.log('Razorpay linked:', !!NativeModules.RazorpayModule);
+
+// If undefined → check pod install / gradle sync ran after install
+```
+
+---
+
+### Q358. What is `npx expo install` vs `npm install`?
+
+**Difficulty:** 🟢 Easy | **Frequency:** High | **Category:** Expo
+
+**Answer:**
+```bash
+# npm install — picks latest version (may be incompatible)
+npm install expo-camera
+# Installs latest expo-camera — may require newer Expo SDK than you have
+
+# npx expo install — picks version compatible with YOUR Expo SDK
+npx expo install expo-camera
+# Installs expo-camera@14.0.3 (or whatever matches your SDK 50, for example)
+
+# npx expo install can also fix mismatched versions:
+npx expo install --fix
+# Checks all expo-* packages, downgrades/upgrades to compatible versions
+```
+
+**Why it matters:**
+```
+Expo SDK 50 → requires expo-camera@14.x
+If you npm install → gets expo-camera@15.x (requires SDK 51)
+Result: runtime crash or build error about incompatible modules
+
+npx expo install → gets expo-camera@14.0.x automatically ✅
+```
+
+```bash
+# Check for version mismatches
+npx expo-doctor
+# Reports: incompatible package versions, deprecated config, etc.
+
+# Audit all dependencies
+npx expo install --check
+# Lists packages that need updating to be compatible
+
+# Fix all at once
+npx expo install --fix
+```
+
+---
+
+### Q359. How do you set up CI/CD with EAS Build?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** EAS Build + CI/CD
+
+**Answer:**
+```yaml
+# GitHub Actions workflow: .github/workflows/build.yml
+
+name: EAS Build & Submit
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Build (PR — development APK for testing)
+        if: github.event_name == 'pull_request'
+        run: eas build --platform android --profile development --non-interactive
+
+      - name: Build & Submit (main — production)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          eas build --platform android --profile production --non-interactive
+          eas submit --platform android --profile production --non-interactive
+        env:
+          APP_ENV: production
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+
+  build-ios:
+    runs-on: ubuntu-latest  # EAS Build handles iOS on its own macOS runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm' }
+      - run: npm ci
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - name: Build iOS production
+        if: github.ref == 'refs/heads/main'
+        run: eas build --platform ios --profile production --non-interactive --auto-submit
+```
+
+```bash
+# Required secrets in GitHub repo settings:
+# EXPO_TOKEN — from expo.dev → Account Settings → Access Tokens
+# GOOGLE_SERVICES_JSON — base64 encoded google-services.json
+# (iOS credentials managed by EAS automatically)
+```
+
+---
+
+### Q360. What is the difference between `expo start`, `expo run:android`, and `eas build`?
+
+**Difficulty:** 🟢 Easy | **Frequency:** High | **Category:** Expo Commands
+
+**Answer:**
+
+| Command | What it does | When to use |
+|---------|-------------|-------------|
+| `npx expo start` | Starts Metro bundler, serves JS bundle | Daily development (with Expo Go or dev client) |
+| `npx expo run:android` | Local Gradle build + install debug APK on device | Test native changes locally |
+| `npx expo run:ios` | Local Xcode build + install on simulator/device | Test native changes locally on Mac |
+| `eas build` | Cloud build on Expo's servers | Production builds, iOS builds without Mac |
+| `eas build --profile development` | Cloud debug build | Share dev build with team |
+
+```bash
+# expo start — pure JS dev, no native build
+npx expo start          # Expo Go or dev client
+npx expo start --tunnel # Use ngrok tunnel (for physical device on different network)
+npx expo start --offline # Disable manifest network checks
+
+# expo run — local native build (needs Xcode/Android Studio)
+npx expo run:android
+npx expo run:android --device        # specific physical device
+npx expo run:ios --simulator         # any simulator
+npx expo run:ios --device "iPhone 15" # specific simulator
+
+# eas build — cloud build
+eas build --platform android --profile production
+eas build --platform ios --profile preview --non-interactive
+eas build --platform all --profile production --auto-submit
+
+# Key: expo start/run are for DEVELOPMENT
+#      eas build is for DISTRIBUTION (internal/store)
+```
+
+---
+
+### Q361. How do you manage app signing in Expo?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** App Signing + Expo
+
+**Answer:**
+```bash
+# EAS Credentials — manages all signing automatically
+eas credentials --platform ios
+eas credentials --platform android
+
+# iOS credentials EAS manages:
+# - Distribution certificate (for App Store / AdHoc)
+# - Push notification certificate
+# - Provisioning profiles (development, adhoc, distribution)
+# - App Store Connect API key
+
+# Android credentials EAS manages:
+# - Keystore (upload and app signing key)
+# - SHA-1 fingerprints (for Firebase, Google APIs)
+```
+
+```json
+// eas.json — credential management
+{
+  "build": {
+    "production": {
+      "ios": {
+        "credentialsSource": "remote",  // EAS manages credentials
+        // OR:
+        // "credentialsSource": "local"   // you manage credentials
+      },
+      "android": {
+        "credentialsSource": "remote"
+      }
+    }
+  }
+}
+```
+
+```bash
+# iOS — letting EAS manage signing
+eas build --platform ios --profile production
+# EAS asks: "Generate new certificate?" → Yes (first time)
+# EAS creates + stores certificate in its credentials store
+# Future builds automatically use stored certificate
+
+# Android — EAS generates keystore on first build
+eas build --platform android --profile production
+# Keystore stored in EAS — download backup!
+eas credentials --platform android
+# → Download Keystore → save backup in secure location
+
+# CRITICAL: Back up your Android keystore
+# If lost, you CANNOT update your app on Play Store
+# Store in: 1Password / AWS Secrets Manager / company vault
+```
+
+```bash
+# Bring your own credentials (if you already have them)
+# iOS: provide .p12 certificate + provisioning profile
+# Android: provide existing .jks keystore
+
+eas credentials --platform android
+# → Import existing Keystore
+# → Provide path to .jks file + alias + passwords
+```
+
+---
+
+### Q362. What is Expo Router and how does it compare to React Navigation?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Expo Router
+
+**Answer:**
+Expo Router is a file-based routing system for Expo/React Native apps, inspired by Next.js. It uses the file system as the source of truth for navigation structure.
+
+```
+app/
+├── _layout.tsx          ← Root layout (NavigationContainer equivalent)
+├── index.tsx            ← Route: /
+├── (auth)/
+│   ├── _layout.tsx      ← Auth stack layout
+│   ├── login.tsx        ← Route: /login
+│   └── register.tsx     ← Route: /register
+├── (tabs)/
+│   ├── _layout.tsx      ← Tab navigator layout
+│   ├── home.tsx         ← Route: /home (Tab 1)
+│   ├── employees.tsx    ← Route: /employees (Tab 2)
+│   └── profile.tsx      ← Route: /profile (Tab 3)
+├── employee/
+│   └── [id].tsx         ← Route: /employee/:id (dynamic)
+└── +not-found.tsx       ← 404 handler
+```
+
+```tsx
+// app/(tabs)/_layout.tsx — tab navigator
+import { Tabs } from 'expo-router';
+
+export default function TabLayout() {
+    return (
+        <Tabs screenOptions={{ tabBarActiveTintColor: '#6200EE' }}>
+            <Tabs.Screen name="home" options={{ title: 'Home' }} />
+            <Tabs.Screen name="employees" options={{ title: 'Employees' }} />
+            <Tabs.Screen name="profile" options={{ title: 'Profile' }} />
+        </Tabs>
+    );
+}
+
+// app/employee/[id].tsx — dynamic route
+import { useLocalSearchParams } from 'expo-router';
+export default function EmployeeDetail() {
+    const { id } = useLocalSearchParams<{ id: string }>();
+    return <EmployeeDetailScreen employeeId={id} />;
+}
+
+// Navigation (like React Navigation navigate)
+import { router, Link } from 'expo-router';
+router.push('/employee/123');
+router.replace('/login');
+router.back();
+
+<Link href="/employee/123">View Employee</Link>
+<Link href={{ pathname: '/employee/[id]', params: { id: '123' } }}>View Employee</Link>
+```
+
+**Expo Router vs React Navigation:**
+| | Expo Router | React Navigation |
+|--|------------|-----------------|
+| Config style | File-based (like Next.js) | Code-based (explicit) |
+| Deep linking | Automatic (from file structure) | Manual config |
+| Web support | ✅ Built-in | ⚠️ Extra setup |
+| Type safety | ✅ TypeScript paths | Partial |
+| Flexibility | Less | More |
+| Learning curve | Easier (if familiar with Next.js) | Steeper |
+
+---
+
+### Q363. How do you handle push notifications in Expo?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Push Notifications + Expo
+
+**Answer:**
+```bash
+npx expo install expo-notifications expo-device expo-constants
+```
+
+```js
+import * as Notifications from 'expo-notifications';
+import * as Device from 'expo-device';
+import Constants from 'expo-constants';
+
+// Configure notification behaviour
+Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+    }),
+});
+
+// Get Expo push token (for Expo's push service)
+const registerForPushNotifications = async () => {
+    if (!Device.isDevice) {
+        console.log('Must use physical device for push notifications');
+        return null;
+    }
+
+    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    let finalStatus = existingStatus;
+
+    if (existingStatus !== 'granted') {
+        const { status } = await Notifications.requestPermissionsAsync();
+        finalStatus = status;
+    }
+
+    if (finalStatus !== 'granted') {
+        alert('Failed to get push token — permission denied');
+        return null;
+    }
+
+    const projectId = Constants.expoConfig?.extra?.eas?.projectId;
+    const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+    console.log('Expo push token:', token);
+
+    // Send token to your backend
+    await api.updatePushToken(token);
+    return token;
+};
+
+// Listen for incoming notifications
+const usePushNotifications = () => {
+    useEffect(() => {
+        registerForPushNotifications();
+
+        // Notification received while app is foregrounded
+        const foregroundSub = Notifications.addNotificationReceivedListener(notification => {
+            console.log('Received:', notification);
+        });
+
+        // User tapped on notification
+        const responseSub = Notifications.addNotificationResponseReceivedListener(response => {
+            const { screen, params } = response.notification.request.content.data;
+            if (screen) navigation.navigate(screen, params);
+        });
+
+        return () => {
+            foregroundSub.remove();
+            responseSub.remove();
+        };
+    }, []);
+};
+```
+
+```js
+// Schedule local notification
+await Notifications.scheduleNotificationAsync({
+    content: {
+        title: 'Shift starting',
+        body: 'Your shift starts in 15 minutes',
+        data: { screen: 'Attendance', action: 'checkIn' },
+        sound: 'default',
+        badge: 1,
+    },
+    trigger: {
+        seconds: 900, // 15 minutes from now
+    },
+});
+
+// Cancel all scheduled
+await Notifications.cancelAllScheduledNotificationsAsync();
+```
+
+---
+
+### Q364. What is the difference between `expo-updates` manual vs automatic updates?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** EAS Update
+
+**Answer:**
+```json
+// app.json — update check strategy
+{
+  "expo": {
+    "updates": {
+      "checkAutomatically": "ON_LOAD"
+      // Options:
+      // "ON_LOAD"              — check on every app launch (default)
+      // "ON_ERROR_RECOVERY"    — only check when previous bundle fails
+      // "WIFI_ONLY"            — check only on Wi-Fi
+      // "NEVER"                — disable automatic checks (manual only)
+    }
+  }
+}
+```
+
+```js
+// Automatic update (ON_LOAD behaviour):
+// 1. App starts → check Expo servers for update
+// 2. If update available → download in background
+// 3. NEXT launch → uses new bundle
+// ⚠️ User won't see update until NEXT launch
+
+// Manual update check:
+import * as Updates from 'expo-updates';
+
+const ForceUpdatePrompt = () => {
+    const [hasUpdate, setHasUpdate] = useState(false);
+
+    useEffect(() => {
+        checkUpdate();
+    }, []);
+
+    const checkUpdate = async () => {
+        if (__DEV__) return;
+        try {
+            const { isAvailable } = await Updates.checkForUpdateAsync();
+            if (isAvailable) setHasUpdate(true);
+        } catch (e) {
+            console.error('Update check failed:', e);
+        }
+    };
+
+    const applyUpdate = async () => {
+        try {
+            await Updates.fetchUpdateAsync();
+            await Updates.reloadAsync(); // immediate restart
+        } catch (e) {
+            Alert.alert('Update failed', 'Please restart the app manually');
+        }
+    };
+
+    if (!hasUpdate) return null;
+    return (
+        <Banner
+            message="New version available"
+            action={{ label: 'Update Now', onPress: applyUpdate }}
+        />
+    );
+};
+
+// Critical update (force restart immediately)
+const applyCriticalUpdate = async () => {
+    const { isAvailable } = await Updates.checkForUpdateAsync();
+    if (isAvailable) {
+        await Updates.fetchUpdateAsync();
+        await Updates.reloadAsync(); // user sees immediate restart
+    }
+};
+```
+
+---
+
+### Q365. How do you profile and reduce Expo build times?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** EAS Build Optimisation
+
+**Answer:**
+```bash
+# Check build duration in EAS dashboard
+# https://expo.dev/accounts/[account]/projects/[project]/builds
+
+# Common slow build causes and fixes:
+
+# 1. Pod install taking too long (iOS)
+# Fix: cache pods between builds
+# eas.json:
+# "cache": { "paths": ["~/.cocoapods"] }
+
+# 2. npm install slow
+# Fix: use npm ci + package-lock.json
+# OR switch to yarn + yarn.lock
+# EAS caches node_modules if lock file unchanged
+
+# 3. Too many cocoapods
+# Audit and remove unused ios pods
+# pod deintegrate && pod install (clean install)
+
+# 4. Gradle build slow (Android)
+# Enable gradle caching in eas.json
+```
+
+```json
+// eas.json — build caching
+{
+  "build": {
+    "production": {
+      "cache": {
+        "key": "production-v1",
+        "paths": [
+          "node_modules",
+          "~/.gradle/caches",
+          "~/.cocoapods",
+          "ios/Pods"
+        ]
+      }
+    }
+  }
+}
+```
+
+```bash
+# 5. Reduce JS bundle size (faster Metro bundling)
+# Remove unused dependencies: npx depcheck
+# Use tree-shakeable imports
+
+# 6. Use EAS Build worker type
+# "resourceClass": "medium" (default) vs "large" (faster, paid)
+# eas.json:
+# "resourceClass": "large"  # for faster builds
+
+# 7. Split iOS and Android builds
+# Don't use --platform all if only one changed
+eas build --platform android --profile production
+
+# 8. Parallel builds
+eas build --platform all --profile production
+# EAS automatically builds iOS and Android in parallel
+
+# Monitor build logs for slow steps:
+eas build --platform android --profile production --json | jq '.buildJob.logs'
+```
+
+---
+
+### Q366. What is Expo's `app.json` `plugins` array?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Expo Config Plugins
+
+**Answer:**
+The `plugins` array in `app.json` / `app.config.js` specifies **config plugins** that run during `expo prebuild` to modify native project files.
+
+```json
+{
+  "expo": {
+    "plugins": [
+      // String — plugin with no configuration
+      "expo-router",
+
+      // Array — plugin with options [pluginName, options]
+      ["expo-camera", {
+        "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera to scan attendance QR codes."
+      }],
+
+      ["expo-location", {
+        "locationWhenInUsePermission": "Allow $(PRODUCT_NAME) to use your location for attendance tracking.",
+        "locationAlwaysPermission": "Allow $(PRODUCT_NAME) to track location in background."
+      }],
+
+      ["expo-notifications", {
+        "icon": "./assets/notification-icon.png",
+        "color": "#6200EE",
+        "sounds": ["./assets/notification-sound.wav"],
+        "androidMode": "default",
+        "androidCollapsedTitle": "%(count)s notifications"
+      }],
+
+      // Path to custom plugin
+      "./plugins/withCustomAndroidPermissions",
+      "./plugins/withSentryNative"
+    ]
+  }
+}
+```
+
+```js
+// Writing your own plugin
+// plugins/withSentryNative.js
+const { withAppBuildGradle } = require('@expo/config-plugins');
+
+const withSentryNative = (config) => {
+    return withAppBuildGradle(config, (config) => {
+        const buildGradle = config.modResults.contents;
+
+        // Add Sentry plugin to build.gradle
+        if (!buildGradle.includes('io.sentry.android.gradle')) {
+            config.modResults.contents = buildGradle.replace(
+                `apply plugin: "com.facebook.react"`,
+                `apply plugin: "com.facebook.react"\napply plugin: "io.sentry.android.gradle"`
+            );
+        }
+        return config;
+    });
+};
+
+module.exports = withSentryNative;
+```
+
+---
+
+### Q367. How do you implement OTA updates safely in production?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** EAS Update + Production
+
+**Answer:**
+```bash
+# EAS Update channels — environment separation
+# Each build is linked to a channel
+# Updates are published to channels, not directly to builds
+
+# Branch ≠ git branch — it's an EAS Update distribution group
+eas update --branch production --message "Fix login crash"
+eas update --branch staging --message "New dashboard feature"
+eas update --branch dev --message "Experimental feature"
+```
+
+```json
+// eas.json — link build profiles to update channels
+{
+  "build": {
+    "production": {
+      "channel": "production"   // builds receive updates from "production" branch
+    },
+    "staging": {
+      "channel": "staging"
+    },
+    "development": {
+      "channel": "development"
+    }
+  }
+}
+```
+
+```bash
+# Staged rollout — publish to subset of users
+eas update --branch production --rollout-percentage 10
+# 10% of users get the update → monitor for issues
+# Increase rollout:
+eas update:rollout --branch production --percentage 50
+eas update:rollout --branch production --percentage 100
+
+# Rollback — re-publish previous update
+eas update:list --branch production
+# Get ID of last good update
+eas update:republish --branch production --group <update-group-id>
+```
+
+```js
+// Client-side: graceful update with retry
+const safeUpdate = async () => {
+    try {
+        const { isAvailable } = await Updates.checkForUpdateAsync();
+        if (!isAvailable) return;
+
+        await Updates.fetchUpdateAsync();
+        // Only reload if app is idle (not mid-transaction)
+        if (!isProcessingPayment && !isFormDirty) {
+            await Updates.reloadAsync();
+        } else {
+            // Notify user to restart manually after completing action
+            setPendingUpdate(true);
+        }
+    } catch (error) {
+        // Don't crash the app if update fails
+        Sentry.captureException(error);
+    }
+};
+```
+
+---
+
+### Q368. What is `expo-constants` and what information does it expose?
+
+**Difficulty:** 🟢 Easy | **Frequency:** High | **Category:** Expo SDK
+
+**Answer:**
+`expo-constants` exposes app configuration and device information that's available at JavaScript runtime.
+
+```js
+import Constants from 'expo-constants';
+
+// App configuration
+const appVersion = Constants.expoConfig?.version;           // "1.2.0"
+const appName = Constants.expoConfig?.name;                 // "My App"
+const slug = Constants.expoConfig?.slug;                    // "my-app"
+const extra = Constants.expoConfig?.extra;                  // custom config from app.json
+
+// Runtime info
+const isExpoGo = Constants.appOwnership === 'expo';        // true in Expo Go
+const sessionId = Constants.sessionId;                      // unique ID for this session
+const executionEnvironment = Constants.executionEnvironment; // 'storeClient', 'standalone', 'bare'
+
+// Device info (limited in Expo, use expo-device for more)
+const deviceName = Constants.deviceName;                    // "Devesh's iPhone"
+
+// Build info
+const nativeAppVersion = Constants.nativeAppVersion;        // "1.2.0" from native build
+const nativeBuildVersion = Constants.nativeBuildVersion;    // "23" (build number)
+
+// Detect environment
+const isStandaloneApp = Constants.executionEnvironment === 'standalone';
+const isDevelopment = __DEV__;
+const isExpo = Constants.appOwnership === 'expo';
+
+// Access custom extra config (from app.config.js)
+const { apiUrl, environment } = Constants.expoConfig?.extra || {};
+
+// EAS Update info
+const updateId = Updates.updateId;      // null if running embedded bundle
+const channel = Updates.channel;        // "production", "staging"
+
+// Usage in environment detection
+export const getEnvironment = () => {
+    const extra = Constants.expoConfig?.extra;
+    return extra?.environment || 'development';
+};
+
+export const getApiUrl = () => {
+    const extra = Constants.expoConfig?.extra;
+    return extra?.apiUrl || 'http://localhost:3000';
+};
+```
+
+---
+
+### Q369. How do you debug EAS Build failures?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** EAS Build + Debugging
+
+**Answer:**
+```bash
+# 1. Read build logs (most important step)
+eas build:list          # list recent builds with IDs
+eas build:view <build-id>  # open build details in browser
+# OR open https://expo.dev → your project → Builds
+
+# Common Android build failures:
+
+# Error: "Task :app:compileDebugKotlin FAILED"
+# Cause: Kotlin compilation error in native module
+# Fix: Check the specific Kotlin error in logs, usually wrong API usage
+
+# Error: "Execution failed for task ':app:mergeDebugAssets'"
+# Cause: Duplicate asset files
+# Fix: Check for duplicate files in android/app/src/main/assets
+
+# Error: "Could not resolve com.example:library:1.0.0"
+# Cause: Missing Maven dependency
+# Fix: Add repository to android/build.gradle:
+# maven { url 'https://jitpack.io' }
+
+# Error: "Duplicate class kotlin.collections.jdk8"
+# Cause: Kotlin version conflict
+# Fix: android/build.gradle:
+# configurations.all { resolutionStrategy.force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.0' }
+```
+
+```bash
+# Common iOS build failures:
+
+# Error: "No profiles for 'com.company.app' were found"
+# Fix: eas credentials --platform ios → regenerate provisioning profile
+
+# Error: "CocoaPods could not find compatible versions for pod 'FirebaseAnalytics'"
+# Fix: Update Podfile.lock: cd ios && pod update FirebaseAnalytics && cd ..
+#      Commit updated Podfile.lock
+
+# Error: "Undefined symbol: _RCTRegisterModule"
+# Fix: Missing React Native linkage — check all pods are installed
+
+# Error: "Multiple commands produce '/path/to/Info.plist'"
+# Fix: Remove duplicate targets in Xcode project
+```
+
+```bash
+# Local reproduction of EAS Build failure:
+npx expo run:ios --no-install  # skip pod install (use cached pods)
+npx expo run:android           # local Gradle build
+
+# Verbose EAS build logs
+eas build --platform android --profile production --local
+# Runs build locally with same commands as EAS
+# Faster debugging — see full output without waiting for CI
+```
+
+---
+
+### Q370. What are the key differences between Expo SDK versions and how do you upgrade?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Expo Upgrades
+
+**Answer:**
+```bash
+# Expo releases major SDK versions ~3x per year
+# Each SDK version targets a specific React Native version:
+# SDK 50 → React Native 0.73
+# SDK 51 → React Native 0.74
+# SDK 52 → React Native 0.76 (New Architecture default)
+
+# Check your current SDK version
+cat package.json | grep '"expo"'
+
+# Upgrade to latest SDK
+npx expo install expo@latest    # upgrade expo core
+
+# Upgrade all Expo SDK packages to match new SDK
+npx expo install --fix
+
+# Full upgrade process:
+# 1. Read the migration guide: docs.expo.dev/workflow/upgrading-expo-sdk
+# 2. Update expo in package.json
+npm install expo@51  # or whatever version
+
+# 3. Update all expo-* packages
+npx expo install --fix
+
+# 4. Update React Native (if SDK requires it)
+npx expo install react-native@0.74 react@18.2.0
+
+# 5. Regenerate native (if bare/CNG)
+npx expo prebuild --clean
+cd ios && pod install && cd ..
+
+# 6. Test thoroughly
+npx expo run:android
+npx expo run:ios
+```
+
+```bash
+# Breaking changes to watch for:
+
+# SDK 50: expo-router v3, New Architecture improvements
+# SDK 51: Expo DOM Components, expo-video (replaces expo-av for video)
+# SDK 52: New Architecture default, React 19
+
+# expo-doctor — checks for issues before upgrading
+npx expo-doctor
+
+# Check changelog before upgrading:
+# https://expo.dev/changelog
+# https://github.com/expo/expo/releases
+
+# Canary versions — test upcoming SDK before release
+npm install expo@canary
+
+# Support window:
+# Expo supports last 3 SDK versions with security patches
+# Older than 3 versions = no support, must upgrade
+```
+
+---
+
+## Sections Overview (Q371–Q500)
+
+| Section | Questions | Topics |
+|---------|-----------|--------|
+| Testing | Q371–Q420 | Unit, integration, e2e (Detox), mocking |
+| Debugging | Q421–Q450 | Flipper, Hermes debugger, crash reporting |
+| Storage & Permissions | Q451–Q480 | AsyncStorage, Keychain, permission flows |
+| Miscellaneous | Q481–Q500 | Accessibility, internationalisation, misc APIs |
+
+---
+
+> 💡 **Tip for GitHub:** Add a `## Table of Contents` section at the top with anchor links to each question for easy navigation.
+
+---
+
+*Part 01 of 8 — [← Back to Part README](./README.md) · [← Main README](../README.md)*
