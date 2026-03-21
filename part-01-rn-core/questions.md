@@ -3641,15 +3641,1514 @@ const linking = {
 
 ---
 
-*[Questions Q101–Q500 continue in the same format across all remaining sections: Hooks Deep Dive continued, Styling & Layout, Animations, Performance, Native Modules, Expo vs CLI, Testing, Debugging, Storage, Permissions, and Miscellaneous]*
+---
+
+## Section 4: Hooks Deep Dive — Continued (Q101–Q130)
 
 ---
 
-## Sections Overview (Q101–Q500)
+### Q101. What is `useSyncExternalStore` and why was it introduced?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Low | **Category:** React 18 Hooks
+
+**Answer:**
+`useSyncExternalStore` is a React 18 hook for subscribing to external stores (non-React state — like Redux, Zustand, or browser APIs) in a way that's safe with concurrent rendering. Before React 18, subscribing to external stores in `useEffect` could cause "tearing" — different components reading different values from the same store within a single render pass.
+
+`useSyncExternalStore` solves this by making React aware of the store subscription and ensuring a consistent snapshot.
+
+**Code:**
+```js
+import { useSyncExternalStore } from 'react';
+
+// Subscribe to any external store
+const useNetworkStatus = () => {
+  return useSyncExternalStore(
+    // subscribe — called when store changes, returns unsubscribe fn
+    (callback) => {
+      const listener = NetInfo.addEventListener(callback);
+      return () => listener(); // unsubscribe
+    },
+    // getSnapshot — returns current value (must be stable reference if unchanged)
+    () => NetInfo.fetch(),
+    // getServerSnapshot — optional, for SSR
+    () => ({ isConnected: true })
+  );
+};
+
+// Custom store example
+let store = { count: 0 };
+let listeners = new Set();
+
+const counterStore = {
+  subscribe: (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
+  getSnapshot: () => store,
+  increment: () => {
+    store = { count: store.count + 1 };
+    listeners.forEach(cb => cb());
+  },
+};
+
+const Counter = () => {
+  const { count } = useSyncExternalStore(
+    counterStore.subscribe,
+    counterStore.getSnapshot
+  );
+  return <Text>{count}</Text>;
+};
+```
+
+**Follow-up:** Why can't you just use `useEffect` + `useState` for this? → In concurrent mode, React can render components multiple times without committing. If an external store updates between these renders, components could read inconsistent values — "tearing". `useSyncExternalStore` prevents this.
+
+---
+
+### Q102. What is `useDeferredValue`?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Low | **Category:** React 18 Hooks
+
+**Answer:**
+`useDeferredValue` accepts a value and returns a deferred version of it. During urgent updates (like typing), the deferred value lags behind — React re-renders the non-urgent parts with the old value first, then updates them in the background.
+
+It is the value equivalent of `useTransition` (which wraps state updates).
+
+**Code:**
+```js
+import { useDeferredValue, useMemo } from 'react';
+
+const SearchScreen = ({ query }) => {
+  // deferredQuery lags behind query during typing
+  const deferredQuery = useDeferredValue(query);
+
+  // This expensive computation uses the deferred (old) value
+  // while the input shows the latest value immediately
+  const results = useMemo(() => {
+    return heavyFilter(allData, deferredQuery);
+  }, [deferredQuery]);
+
+  const isStale = query !== deferredQuery; // true while deferred
+
+  return (
+    <View style={{ opacity: isStale ? 0.5 : 1 }}>
+      <FlatList data={results} renderItem={renderItem} />
+    </View>
+  );
+};
+```
+
+**Difference from `useTransition`:**
+- `useTransition` — wraps a state *setter* call, marks the update as non-urgent
+- `useDeferredValue` — wraps a *value* (often a prop you don't control), defers its propagation
+
+**Follow-up:** When would you use `useDeferredValue` over `debounce`? → `useDeferredValue` is aware of React's scheduler — it defers work during busy renders without a fixed time delay. Debounce uses a fixed timer regardless of system load.
+
+---
+
+### Q103. What is the difference between `useEffect` and `useInsertionEffect`?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Very Low | **Category:** React 18 Hooks
+
+**Answer:**
+`useInsertionEffect` fires synchronously before any DOM mutations — even before `useLayoutEffect`. It was added specifically for CSS-in-JS libraries that need to inject styles before the browser measures layout.
+
+**Execution order:**
+```
+render → useInsertionEffect → DOM mutation → useLayoutEffect → paint → useEffect
+```
+
+**Code:**
+```js
+import { useInsertionEffect } from 'react';
+
+// Only for CSS-in-JS library authors — NOT for app code
+const useStyles = (styles) => {
+  useInsertionEffect(() => {
+    // Inject a <style> tag before layout is measured
+    const styleEl = document.createElement('style');
+    styleEl.innerHTML = styles;
+    document.head.appendChild(styleEl);
+    return () => document.head.removeChild(styleEl);
+  }, [styles]);
+};
+```
+
+**In React Native:** Almost never used — there is no CSS injection. It's mainly relevant for styled-components or Emotion on React Native Web.
+
+**Follow-up:** What is the real-world use? → Libraries like styled-components use it to inject styles before `useLayoutEffect` reads layout, preventing a flash of unstyled content.
+
+---
+
+### Q104. How do you create a global state without Redux?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** State Management
+
+**Answer:**
+Three common patterns for global state without Redux:
+
+**Pattern 1: Context + useReducer (Redux-lite)**
+```js
+// store.js
+const initialState = { user: null, theme: 'light', cart: [] };
+
+const reducer = (state, action) => {
+  switch (action.type) {
+    case 'SET_USER': return { ...state, user: action.payload };
+    case 'SET_THEME': return { ...state, theme: action.payload };
+    default: return state;
+  }
+};
+
+const StoreContext = createContext(null);
+const DispatchContext = createContext(null);
+
+export const StoreProvider = ({ children }) => {
+  const [state, dispatch] = useReducer(reducer, initialState);
+  return (
+    <StoreContext.Provider value={state}>
+      <DispatchContext.Provider value={dispatch}>
+        {children}
+      </DispatchContext.Provider>
+    </StoreContext.Provider>
+  );
+};
+
+// Split contexts so components only re-render for what they use
+export const useStore = () => useContext(StoreContext);
+export const useDispatch = () => useContext(DispatchContext);
+```
+
+**Pattern 2: Zustand (simplest)**
+```js
+import { create } from 'zustand';
+
+const useStore = create((set) => ({
+  user: null,
+  count: 0,
+  setUser: (user) => set({ user }),
+  increment: () => set((state) => ({ count: state.count + 1 })),
+}));
+
+// Any component — no Provider needed
+const ProfileScreen = () => {
+  const { user, setUser } = useStore();
+  return <Text>{user?.name}</Text>;
+};
+```
+
+**Pattern 3: `useSyncExternalStore` with a custom store**
+```js
+// Covered in Q101 — use for complex subscription scenarios
+```
+
+**Follow-up:** When should you reach for Redux vs Zustand vs Context? → Context for small apps or auth/theme. Zustand for medium apps wanting simplicity. Redux for large teams needing DevTools, middleware, and strict conventions.
+
+---
+
+### Q105. How does React batch state updates?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** React Internals
+
+**Answer:**
+Batching means React groups multiple `setState` calls into a single re-render. This prevents wasteful intermediate renders.
+
+**React 17 and earlier — only batched inside React event handlers:**
+```js
+// Inside a React event handler — batched (one re-render)
+const handlePress = () => {
+  setCount(c => c + 1);
+  setName('Devesh');
+  // ONE re-render
+};
+
+// Inside setTimeout / async — NOT batched (two re-renders)
+setTimeout(() => {
+  setCount(c => c + 1); // re-render 1
+  setName('Devesh');    // re-render 2
+}, 0);
+```
+
+**React 18 — automatic batching everywhere:**
+```js
+// ALL of these are batched in React 18 — even in async, setTimeout, promises
+setTimeout(() => {
+  setCount(c => c + 1);
+  setName('Devesh');
+  // ONE re-render ✅
+}, 0);
+
+fetch('/api').then(() => {
+  setData(result);
+  setLoading(false);
+  // ONE re-render ✅
+});
+```
+
+**Opt out of batching (rare):**
+```js
+import { flushSync } from 'react-dom';
+
+flushSync(() => setCount(c => c + 1)); // forces immediate re-render
+flushSync(() => setName('Devesh'));     // second immediate re-render
+```
+
+**Follow-up:** Does batching cause any issues? → Rarely. If you need to read updated DOM between two state updates (e.g., measure layout after first update), `flushSync` forces a synchronous flush.
+
+---
+
+### Q106. What is the difference between `null`, `undefined`, and `false` in JSX rendering?
+
+**Difficulty:** 🟢 Easy | **Frequency:** Medium | **Category:** React Basics
+
+**Answer:**
+In JSX, `null`, `undefined`, `false`, and empty string `''` all render nothing (no output). But there's one common trap:
+
+```js
+// These all render nothing — safe
+{null}
+{undefined}
+{false}
+{true}
+
+// ⚠️ TRAP — 0 renders as "0" on screen!
+const count = 0;
+{count && <Text>Has items</Text>}
+// Renders "0" not nothing! Because 0 is falsy but not null/false
+
+// ✅ Fix — convert to boolean
+{count > 0 && <Text>Has items</Text>}
+{!!count && <Text>Has items</Text>}
+{Boolean(count) && <Text>Has items</Text>}
+
+// Or use ternary
+{count ? <Text>Has items</Text> : null}
+```
+
+**This is one of the most common React Native bugs in production** — a `0` unexpectedly showing up in the UI because of `{array.length && <Component />}`.
+
+**Follow-up:** Why does `0 && <Component />` render `0`? → `&&` short-circuits and returns the first falsy value. `0` is falsy, so it returns `0` — which JSX renders as the text "0".
+
+---
+
+### Q107. What is prop drilling and what are its solutions?
+
+**Difficulty:** 🟢 Easy | **Frequency:** High | **Category:** Architecture
+
+**Answer:**
+Prop drilling is passing props through multiple component layers just to reach a deeply nested component that needs the data. The intermediate components don't use the data — they just pass it through.
+
+```js
+// Prop drilling (bad for deep trees)
+const App = () => <Screen user={user} />;
+const Screen = ({ user }) => <Header user={user} />;
+const Header = ({ user }) => <Avatar user={user} />;
+const Avatar = ({ user }) => <Text>{user.name}</Text>; // only this needs it!
+
+// Solutions:
+
+// 1. Context API
+const UserContext = createContext(null);
+const App = () => (
+  <UserContext.Provider value={user}>
+    <Screen />
+  </UserContext.Provider>
+);
+const Avatar = () => {
+  const user = useContext(UserContext);
+  return <Text>{user.name}</Text>;
+};
+
+// 2. Component composition (pass JSX as children/props)
+const App = () => (
+  <Screen header={<Avatar user={user} />} />
+);
+const Screen = ({ header }) => <View>{header}</View>;
+
+// 3. Redux / Zustand global store
+const Avatar = () => {
+  const user = useSelector(state => state.auth.user);
+  return <Text>{user.name}</Text>;
+};
+```
+
+**Follow-up:** Is prop drilling always bad? → No. For 1–2 levels deep, prop drilling is fine and explicit. Over-using Context or Redux for simple cases adds complexity. The rule: if you're drilling through 3+ unrelated components, consider an alternative.
+
+---
+
+### Q108. How do you implement a HOC (Higher Order Component) in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Patterns
+
+**Answer:**
+A Higher Order Component is a function that takes a component and returns a new enhanced component. It's a pattern for reusing component logic (predates hooks; hooks are usually preferred now).
+
+**Code:**
+```js
+// HOC: withAuth — redirects to Login if not authenticated
+const withAuth = (WrappedComponent) => {
+  return (props) => {
+    const { isAuthenticated } = useAuth();
+    const navigation = useNavigation();
+
+    useEffect(() => {
+      if (!isAuthenticated) {
+        navigation.replace('Login');
+      }
+    }, [isAuthenticated]);
+
+    if (!isAuthenticated) return null;
+    return <WrappedComponent {...props} />;
+  };
+};
+
+// Usage
+const DashboardScreen = ({ navigation }) => <View>...</View>;
+export default withAuth(DashboardScreen);
+
+// HOC: withLoading — shows spinner while loading prop is true
+const withLoading = (WrappedComponent) => {
+  return ({ isLoading, ...props }) => {
+    if (isLoading) return <ActivityIndicator size="large" />;
+    return <WrappedComponent {...props} />;
+  };
+};
+
+// HOC: withErrorBoundary — wraps in error boundary
+const withErrorBoundary = (WrappedComponent, FallbackComponent) => {
+  return (props) => (
+    <ErrorBoundary fallback={<FallbackComponent />}>
+      <WrappedComponent {...props} />
+    </ErrorBoundary>
+  );
+};
+```
+
+**HOC vs Custom Hook:** HOCs wrap the component (JSX tree). Custom hooks share logic without wrapping. Prefer custom hooks — they're simpler, composable, and easier to test.
+
+---
+
+### Q109. What is the render props pattern?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Low | **Category:** Patterns
+
+**Answer:**
+Render props is a pattern where a component's `render` (or `children`) prop is a function that returns JSX. The component calls this function with data it controls, letting the consumer decide what to render.
+
+**Code:**
+```js
+// DataFetcher — handles loading/error, calls render with data
+const DataFetcher = ({ url, render }) => {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.get(url).then(setData).finally(() => setLoading(false));
+  }, [url]);
+
+  return render({ data, loading });
+};
+
+// Consumer decides what to render with the data
+<DataFetcher
+  url="/users"
+  render={({ data, loading }) => {
+    if (loading) return <Spinner />;
+    return <UserList users={data} />;
+  }}
+/>
+
+// Children as a function (same pattern, different prop)
+const MouseTracker = ({ children }) => {
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  return (
+    <View onStartShouldSetResponder={() => true}
+          onResponderMove={(e) => setPos({ x: e.nativeEvent.pageX, y: e.nativeEvent.pageY })}>
+      {children(pos)}
+    </View>
+  );
+};
+
+<MouseTracker>
+  {({ x, y }) => <Text>Position: {x}, {y}</Text>}
+</MouseTracker>
+```
+
+**Note:** Custom hooks have largely replaced render props for logic sharing. Render props are still useful for component-level patterns where you want the consumer to control the rendered output.
+
+---
+
+### Q110. What is memoization and when does it hurt performance?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Performance
+
+**Answer:**
+Memoization caches the result of a computation. React provides `useMemo`, `useCallback`, and `React.memo` for memoization. But memoization has a cost — it must store the previous result and compare dependencies on every render.
+
+**When memoization HELPS:**
+```js
+// Expensive computation — filtering 10,000 items
+const filtered = useMemo(() => bigArray.filter(heavyFn), [bigArray]);
+
+// Stable callback passed to a memoized child
+const onPress = useCallback(() => navigate('Detail', { id }), [id]);
+const Child = React.memo(({ onPress }) => <Button onPress={onPress} />);
+```
+
+**When memoization HURTS (or is useless):**
+```js
+// ❌ Cheap computation — no benefit, adds overhead
+const sum = useMemo(() => a + b, [a, b]);
+// Just write: const sum = a + b;
+
+// ❌ New object deps — memo never hits because deps always "change"
+const options = useMemo(() => getData(), [{ id: 1 }]); // new object every render!
+
+// ❌ Memoizing a component that re-renders anyway because its parent passes a new object prop
+const Parent = () => {
+  return <MemoizedChild style={{ margin: 10 }} />; // new object → memo useless
+};
+// Fix: move style to StyleSheet.create or useMemo
+```
+
+**Rule:** Profile first. Only add `useMemo`/`useCallback` when you've identified a real performance problem. Premature optimisation adds cognitive overhead and can introduce bugs (stale deps).
+
+---
+
+### Q111. What is `React.Children` and when do you use it?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Low | **Category:** React API
+
+**Answer:**
+`React.Children` provides utilities for working with the `children` prop — mapping, counting, iterating, or converting children to an array, regardless of whether `children` is a single element, an array, or `null`.
+
+**Code:**
+```js
+import React from 'react';
+
+// Custom Tab component that injects active state into each Tab
+const TabGroup = ({ children, activeTab }) => {
+  return (
+    <View style={styles.row}>
+      {React.Children.map(children, (child, index) => {
+        if (!React.isValidElement(child)) return null;
+
+        // Clone each child and inject extra props
+        return React.cloneElement(child, {
+          isActive: index === activeTab,
+          key: index,
+        });
+      })}
+    </View>
+  );
+};
+
+// Usage
+<TabGroup activeTab={0}>
+  <Tab label="Home" />
+  <Tab label="Profile" />
+  <Tab label="Settings" />
+</TabGroup>
+
+// Other React.Children methods
+React.Children.count(children);         // total count (handles null/undefined)
+React.Children.toArray(children);       // flat array of children
+React.Children.forEach(children, fn);   // iterate without returning
+React.Children.only(children);          // assert exactly one child (throws otherwise)
+```
+
+**Follow-up:** What is `React.cloneElement`? → Creates a copy of an element with merged props. Used in HOCs and compound component patterns to inject props into children.
+
+---
+
+### Q112. What is the compound component pattern?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Patterns
+
+**Answer:**
+Compound components are a group of components that work together and share implicit state through Context. The parent manages state; children access it via `useContext` — no prop drilling.
+
+**Code:**
+```js
+// Accordion compound component
+const AccordionContext = createContext(null);
+
+const Accordion = ({ children }) => {
+  const [openIndex, setOpenIndex] = useState(null);
+  return (
+    <AccordionContext.Provider value={{ openIndex, setOpenIndex }}>
+      <View>{children}</View>
+    </AccordionContext.Provider>
+  );
+};
+
+const AccordionItem = ({ children, index }) => {
+  const { openIndex, setOpenIndex } = useContext(AccordionContext);
+  const isOpen = openIndex === index;
+
+  return (
+    <View>
+      <Pressable onPress={() => setOpenIndex(isOpen ? null : index)}>
+        {children[0] /* Header */}
+      </Pressable>
+      {isOpen && children[1] /* Body */}
+    </View>
+  );
+};
+
+// Attach sub-components to parent
+Accordion.Item = AccordionItem;
+
+// Consumer — clean, readable API
+<Accordion>
+  <Accordion.Item index={0}>
+    <Text>Question 1</Text>
+    <Text>Answer 1</Text>
+  </Accordion.Item>
+  <Accordion.Item index={1}>
+    <Text>Question 2</Text>
+    <Text>Answer 2</Text>
+  </Accordion.Item>
+</Accordion>
+```
+
+**Real-world use in your ERP app:** The HRMS module's form sections used compound components — `<FormSection>`, `<FormSection.Field>`, `<FormSection.Error>` — sharing form state internally without prop drilling.
+
+---
+
+### Q113. How do you handle multiple refs with `useRef`?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Hooks
+
+**Answer:**
+```js
+// Pattern 1: Ref array for dynamic lists (e.g. form fields)
+const fields = ['name', 'email', 'phone', 'address'];
+const inputRefs = useRef(fields.map(() => createRef()));
+
+// Focus next field on submit
+const focusNext = (index) => {
+  if (index < fields.length - 1) {
+    inputRefs.current[index + 1].current?.focus();
+  }
+};
+
+return (
+  <View>
+    {fields.map((field, i) => (
+      <TextInput
+        key={field}
+        ref={inputRefs.current[i]}
+        placeholder={field}
+        returnKeyType={i < fields.length - 1 ? 'next' : 'done'}
+        onSubmitEditing={() => focusNext(i)}
+      />
+    ))}
+  </View>
+);
+
+// Pattern 2: Ref callback (set ref on dynamic items)
+const refsMap = useRef({});
+
+const setRef = useCallback((id) => (el) => {
+  refsMap.current[id] = el;
+}, []);
+
+items.map(item => (
+  <TextInput key={item.id} ref={setRef(item.id)} />
+));
+
+// Access: refsMap.current[item.id]?.focus();
+```
+
+---
+
+### Q114. What is `useEvent` (React RFC) and why was it proposed?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Low | **Category:** React Hooks
+
+**Answer:**
+`useEvent` is a proposed React hook (RFC — not yet in stable React) that would return a stable function reference that always reads the latest props/state, without needing to list them as `useCallback` dependencies.
+
+**The problem it solves:**
+```js
+// Current problem: either stale closure OR re-creating function every render
+const handlePress = useCallback(() => {
+  doSomethingWith(count); // count must be in deps
+}, [count]); // new function every time count changes → defeats React.memo
+
+// useEvent proposal — stable reference, always reads latest state
+const handlePress = useEvent(() => {
+  doSomethingWith(count); // no deps needed — always latest count
+  // reference never changes → React.memo works perfectly
+});
+```
+
+**Current workaround (before useEvent ships):**
+```js
+// useStableCallback custom hook
+const useStableCallback = (fn) => {
+  const ref = useRef(fn);
+  useLayoutEffect(() => { ref.current = fn; });
+  return useCallback((...args) => ref.current(...args), []);
+};
+```
+
+**Follow-up:** Why hasn't `useEvent` shipped yet? → The React team is refining the semantics, especially around Concurrent Mode edge cases where calling the function during rendering (not just events) could cause issues.
+
+---
+
+### Q115. How do you implement optimistic UI updates?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** UX Patterns
+
+**Answer:**
+Optimistic UI updates apply the change to the UI immediately (assuming success) and roll back if the server returns an error. This makes the app feel instant.
+
+**Code:**
+```js
+const TodoList = () => {
+  const [todos, setTodos] = useState(initialTodos);
+
+  const toggleTodo = async (id) => {
+    // 1. Optimistically update UI immediately
+    const previous = todos;
+    setTodos(todos.map(t =>
+      t.id === id ? { ...t, completed: !t.completed } : t
+    ));
+
+    try {
+      // 2. Send to server in background
+      await api.patch(`/todos/${id}/toggle`);
+    } catch (error) {
+      // 3. Rollback on error
+      setTodos(previous);
+      showToast('Failed to update. Please try again.');
+    }
+  };
+
+  return (
+    <FlatList
+      data={todos}
+      keyExtractor={t => t.id.toString()}
+      renderItem={({ item }) => (
+        <Pressable onPress={() => toggleTodo(item.id)}>
+          <Text style={{ textDecorationLine: item.completed ? 'line-through' : 'none' }}>
+            {item.title}
+          </Text>
+        </Pressable>
+      )}
+    />
+  );
+};
+```
+
+**With React Query (recommended):**
+```js
+const { mutate } = useMutation(toggleTodo, {
+  onMutate: async (id) => {
+    await queryClient.cancelQueries(['todos']);
+    const previous = queryClient.getQueryData(['todos']);
+    queryClient.setQueryData(['todos'], old =>
+      old.map(t => t.id === id ? { ...t, completed: !t.completed } : t)
+    );
+    return { previous };
+  },
+  onError: (err, id, context) => {
+    queryClient.setQueryData(['todos'], context.previous); // rollback
+  },
+  onSettled: () => queryClient.invalidateQueries(['todos']),
+});
+```
+
+---
+
+### Q116. What is the `children` prop and how do you type it in TypeScript?
+
+**Difficulty:** 🟢 Easy | **Frequency:** Medium | **Category:** TypeScript + React
+
+**Answer:**
+```ts
+import React, { ReactNode, ReactElement, FC, PropsWithChildren } from 'react';
+
+// Option 1: ReactNode — most permissive (string, number, JSX, null, array)
+interface CardProps {
+  children: ReactNode;
+  title: string;
+}
+const Card: FC<CardProps> = ({ children, title }) => (
+  <View>
+    <Text>{title}</Text>
+    {children}
+  </View>
+);
+
+// Option 2: PropsWithChildren — shortcut
+const Card: FC<PropsWithChildren<{ title: string }>> = ({ children, title }) => (
+  <View><Text>{title}</Text>{children}</View>
+);
+
+// Option 3: ReactElement — only JSX (not strings/numbers)
+interface StrictProps {
+  children: ReactElement; // exactly one React element
+}
+
+// Option 4: React.FC automatically includes children in React 17
+// (removed in React 18 — must be explicit)
+
+// Rendering children conditionally
+const Wrapper = ({ children }: { children: ReactNode }) => {
+  const count = React.Children.count(children);
+  if (count === 0) return null;
+  return <View>{children}</View>;
+};
+```
+
+---
+
+### Q117. How do you share logic between a React Native app and a React web app?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Architecture
+
+**Answer:**
+The key is separating business logic (platform-agnostic) from UI (platform-specific) using a monorepo structure.
+
+**Strategies:**
+
+**1. Custom hooks (no UI, pure logic):**
+```js
+// packages/shared/useAuth.ts — works in RN and web
+export const useAuth = () => {
+  const [user, setUser] = useState(null);
+  const login = async (creds) => { /* pure logic, no RN/web APIs */ };
+  return { user, login };
+};
+
+// React Native app
+import { useAuth } from '@myapp/shared';
+const LoginScreen = () => { const { login } = useAuth(); ... };
+
+// React web app
+import { useAuth } from '@myapp/shared';
+const LoginPage = () => { const { login } = useAuth(); ... };
+```
+
+**2. Platform-specific file extensions:**
+```
+Button.tsx         // shared interface/types
+Button.native.tsx  // RN implementation (Pressable)
+Button.web.tsx     // Web implementation (<button>)
+```
+
+**3. React Native for Web:**
+```js
+// Run the same RN components in a browser
+// metro.config.js resolves .web.js before .js
+// Works for simple components; complex native components need separate implementations
+```
+
+**4. Turbo-repo / Nx monorepo:**
+```
+apps/
+  mobile/    # React Native
+  web/       # Next.js
+packages/
+  ui/        # shared components
+  hooks/     # shared custom hooks
+  api/       # shared API layer
+  utils/     # shared utilities
+```
+
+---
+
+### Q118. What is `Animated.parallel` vs `Animated.sequence` vs `Animated.stagger`?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Animations
+
+**Answer:**
+These are combination APIs for the `Animated` library:
+
+```js
+const opacity = useRef(new Animated.Value(0)).current;
+const translateY = useRef(new Animated.Value(50)).current;
+const scale = useRef(new Animated.Value(0.8)).current;
+
+// parallel — all animations start at the same time
+Animated.parallel([
+  Animated.timing(opacity, { toValue: 1, duration: 300, useNativeDriver: true }),
+  Animated.timing(translateY, { toValue: 0, duration: 300, useNativeDriver: true }),
+  Animated.timing(scale, { toValue: 1, duration: 300, useNativeDriver: true }),
+]).start();
+
+// sequence — each animation starts when the previous finishes
+Animated.sequence([
+  Animated.timing(opacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+  Animated.timing(translateY, { toValue: 0, duration: 200, useNativeDriver: true }),
+  Animated.timing(scale, { toValue: 1, duration: 200, useNativeDriver: true }),
+]).start();
+
+// stagger — like parallel but each starts delay ms after the previous
+// Great for list item entrance animations
+const items = [val1, val2, val3, val4];
+Animated.stagger(
+  100, // 100ms between each start
+  items.map(val =>
+    Animated.timing(val, { toValue: 1, duration: 300, useNativeDriver: true })
+  )
+).start();
+```
+
+**Real use case:** Stagger animation for list items appearing one by one on screen mount — each item fades in 100ms after the previous one.
+
+---
+
+### Q119. What is `Animated.loop` and how do you create a pulsing animation?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Animations
+
+**Answer:**
+`Animated.loop` repeats an animation indefinitely (or a set number of times).
+
+**Code:**
+```js
+const pulseAnim = useRef(new Animated.Value(1)).current;
+
+useEffect(() => {
+  const pulse = Animated.loop(
+    Animated.sequence([
+      Animated.timing(pulseAnim, {
+        toValue: 1.2,
+        duration: 800,
+        easing: Easing.inOut(Easing.ease),
+        useNativeDriver: true,
+      }),
+      Animated.timing(pulseAnim, {
+        toValue: 1,
+        duration: 800,
+        easing: Easing.inOut(Easing.ease),
+        useNativeDriver: true,
+      }),
+    ])
+  );
+
+  pulse.start();
+  return () => pulse.stop(); // cleanup on unmount
+}, []);
+
+<Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+  <View style={styles.notificationDot} />
+</Animated.View>
+
+// Rotating loader
+const spinAnim = useRef(new Animated.Value(0)).current;
+
+const spin = spinAnim.interpolate({
+  inputRange: [0, 1],
+  outputRange: ['0deg', '360deg'],
+});
+
+Animated.loop(
+  Animated.timing(spinAnim, {
+    toValue: 1,
+    duration: 1000,
+    easing: Easing.linear,
+    useNativeDriver: true,
+  })
+).start();
+
+<Animated.View style={{ transform: [{ rotate: spin }] }}>
+  <ActivityIndicator />
+</Animated.View>
+```
+
+---
+
+### Q120. What is the difference between `transform` and layout properties in animations?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Animations
+
+**Answer:**
+This is critical for performance:
+
+**Transform properties** (translateX, translateY, scale, rotate, skewX, skewY):
+- Run on the **UI thread** when `useNativeDriver: true`
+- Do NOT affect layout — other components are not repositioned
+- 60fps even when JS thread is busy
+- ✅ **Always prefer for animations**
+
+**Layout properties** (width, height, top, left, margin, padding, flex):
+- Must run on the **JS thread** (Yoga layout engine)
+- Trigger full layout recalculation
+- `useNativeDriver: true` NOT supported
+- ⚠️ Use sparingly — causes layout passes
+
+```js
+// ✅ GPU-accelerated, UI thread, smooth
+Animated.timing(translateX, {
+  toValue: 100,
+  useNativeDriver: true, // supported
+}).start();
+
+<Animated.View style={{ transform: [{ translateX }] }} />
+
+// ⚠️ Layout-triggered, JS thread, can jank
+const widthAnim = useRef(new Animated.Value(100)).current;
+Animated.timing(widthAnim, {
+  toValue: 200,
+  useNativeDriver: false, // cannot use native driver for layout props!
+}).start();
+
+<Animated.View style={{ width: widthAnim }} />
+```
+
+**Trick:** To "move" a view without affecting layout, use `transform: translateX/Y`. To change actual layout dimensions (e.g., accordion expand), use `LayoutAnimation` or `useNativeDriver: false`.
+
+---
+
+### Q121. How do you implement skeleton loading screens?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** UX Patterns
+
+**Answer:**
+Skeleton screens show placeholder shapes while content loads, giving a perceived performance boost compared to spinners.
+
+**Code:**
+```js
+// Shimmer animation
+const ShimmerPlaceholder = ({ width, height, borderRadius = 4 }) => {
+  const shimmerAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(shimmerAnim, { toValue: 1, duration: 1000, useNativeDriver: true }),
+        Animated.timing(shimmerAnim, { toValue: 0, duration: 1000, useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
+
+  const opacity = shimmerAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.3, 0.7],
+  });
+
+  return (
+    <Animated.View
+      style={{
+        width,
+        height,
+        borderRadius,
+        backgroundColor: '#E0E0E0',
+        opacity,
+      }}
+    />
+  );
+};
+
+// Skeleton screen for a user card
+const UserCardSkeleton = () => (
+  <View style={styles.card}>
+    <ShimmerPlaceholder width={50} height={50} borderRadius={25} /> {/* avatar */}
+    <View style={{ marginLeft: 12 }}>
+      <ShimmerPlaceholder width={120} height={14} />
+      <View style={{ height: 6 }} />
+      <ShimmerPlaceholder width={80} height={12} />
+    </View>
+  </View>
+);
+
+// Usage
+const UserList = () => {
+  const { data, loading } = useApi('/users');
+
+  if (loading) {
+    return (
+      <FlatList
+        data={[1, 2, 3, 4, 5]}
+        keyExtractor={i => i.toString()}
+        renderItem={() => <UserCardSkeleton />}
+      />
+    );
+  }
+  return <FlatList data={data} renderItem={renderUser} />;
+};
+```
+
+**Library option:** `react-native-skeleton-placeholder` or `react-content-loader` for more complex skeleton patterns.
+
+---
+
+### Q122. What is `TouchableWithoutFeedback` and when should you use it?
+
+**Difficulty:** 🟢 Easy | **Frequency:** Medium | **Category:** Components
+
+**Answer:**
+`TouchableWithoutFeedback` is a wrapper that detects taps without any visual feedback (no opacity change, no highlight). It must wrap exactly one child component.
+
+**Use cases:**
+- Dismiss keyboard when tapping outside inputs
+- Wrap a custom component that handles its own visual feedback
+- Accessibility-only interaction areas
+
+```js
+import { TouchableWithoutFeedback, Keyboard } from 'react-native';
+
+// Dismiss keyboard on background tap
+<TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+  <View style={{ flex: 1 }}>
+    <TextInput />
+    <TextInput />
+  </View>
+</TouchableWithoutFeedback>
+
+// Close modal on overlay tap
+<TouchableWithoutFeedback onPress={onClose}>
+  <View style={styles.overlay}>
+    {/* Stop propagation for content inside */}
+    <TouchableWithoutFeedback>
+      <View style={styles.modal}>
+        <Text>Modal content</Text>
+      </View>
+    </TouchableWithoutFeedback>
+  </View>
+</TouchableWithoutFeedback>
+```
+
+**Prefer `Pressable` in modern code** — it's more flexible. Use `TouchableWithoutFeedback` specifically when you need the "no visual feedback" behaviour explicitly.
+
+---
+
+### Q123. How do you implement pull-to-reveal (collapsible header) with scroll?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Animations + UX
+
+**Answer:**
+```js
+import Animated, {
+  useSharedValue,
+  useAnimatedScrollHandler,
+  useAnimatedStyle,
+  interpolate,
+  Extrapolation,
+} from 'react-native-reanimated';
+
+const HEADER_HEIGHT = 80;
+
+const CollapsibleHeaderScreen = () => {
+  const scrollY = useSharedValue(0);
+
+  const scrollHandler = useAnimatedScrollHandler((event) => {
+    scrollY.value = event.contentOffset.y;
+  });
+
+  const headerStyle = useAnimatedStyle(() => {
+    const height = interpolate(
+      scrollY.value,
+      [0, HEADER_HEIGHT],
+      [HEADER_HEIGHT, 0],
+      Extrapolation.CLAMP
+    );
+    const opacity = interpolate(
+      scrollY.value,
+      [0, HEADER_HEIGHT / 2],
+      [1, 0],
+      Extrapolation.CLAMP
+    );
+    return { height, opacity };
+  });
+
+  return (
+    <View style={{ flex: 1 }}>
+      <Animated.View style={[styles.header, headerStyle]}>
+        <Text style={styles.headerTitle}>My App</Text>
+      </Animated.View>
+
+      <Animated.FlatList
+        onScroll={scrollHandler}
+        scrollEventThrottle={16}
+        data={data}
+        renderItem={renderItem}
+        keyExtractor={keyExtractor}
+      />
+    </View>
+  );
+};
+```
+
+---
+
+### Q124. What is the React Native accessibility API?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Accessibility
+
+**Answer:**
+React Native has a comprehensive accessibility API that maps to iOS VoiceOver and Android TalkBack.
+
+**Key props:**
+```js
+<Pressable
+  accessible={true}                          // marks as accessible (default: true for interactive)
+  accessibilityLabel="Submit button"         // read by screen reader
+  accessibilityHint="Double tap to submit"   // additional context
+  accessibilityRole="button"                 // semantic role: button, link, header, image, etc.
+  accessibilityState={{ disabled: false, selected: false }}
+  onAccessibilityTap={handlePress}           // iOS double-tap equivalent
+>
+  <Text>Submit</Text>
+</Pressable>
+
+// Group children under a single accessible element
+<View accessible={true} accessibilityLabel="Price: 499 rupees, In stock">
+  <Text>₹499</Text>
+  <Text>In stock</Text>
+</View>
+
+// Announce dynamic changes
+import { AccessibilityInfo } from 'react-native';
+AccessibilityInfo.announceForAccessibility('Form submitted successfully');
+
+// Check if screen reader is enabled
+const isEnabled = await AccessibilityInfo.isScreenReaderEnabled();
+```
+
+**Follow-up:** How do you test accessibility in React Native? → iOS: enable VoiceOver in Simulator (Cmd+F5). Android: enable TalkBack in emulator settings. Automated: use `accessibilityLabel` in RNTL test queries.
+
+---
+
+### Q125. How do you prevent memory leaks in React Native?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Very High | **Category:** Performance
+
+**Answer:**
+Memory leaks occur when resources are not released after a component unmounts. Common sources and fixes:
+
+**1. State update after unmount:**
+```js
+// ❌ Leak — setData called after unmount
+useEffect(() => {
+  api.get('/data').then(data => setData(data));
+}, []);
+
+// ✅ Fix — cancel flag or AbortController
+useEffect(() => {
+  let active = true;
+  const controller = new AbortController();
+
+  api.get('/data', { signal: controller.signal })
+    .then(data => { if (active) setData(data); })
+    .catch(err => { if (!controller.signal.aborted) console.error(err); });
+
+  return () => { active = false; controller.abort(); };
+}, []);
+```
+
+**2. Event listener not removed:**
+```js
+// ❌ Leak
+useEffect(() => {
+  Keyboard.addListener('keyboardDidShow', handler);
+}, []);
+
+// ✅ Fix
+useEffect(() => {
+  const sub = Keyboard.addListener('keyboardDidShow', handler);
+  return () => sub.remove();
+}, []);
+```
+
+**3. Interval/timeout not cleared:**
+```js
+// ✅ Always clear
+useEffect(() => {
+  const id = setInterval(tick, 1000);
+  return () => clearInterval(id);
+}, []);
+```
+
+**4. WebSocket not closed:**
+```js
+useEffect(() => {
+  const ws = new WebSocket(url);
+  return () => ws.close();
+}, []);
+```
+
+**5. Animated loops not stopped:**
+```js
+useEffect(() => {
+  const anim = Animated.loop(...);
+  anim.start();
+  return () => anim.stop();
+}, []);
+```
+
+**Detection:** Use Flipper Memory plugin or Android Studio's Memory Profiler to detect growing heap that doesn't GC.
+
+---
+
+### Q126. What is `React.createRef` vs `useRef`?
+
+**Difficulty:** 🟢 Easy | **Frequency:** Medium | **Category:** Hooks
+
+**Answer:**
+
+| | `useRef` | `createRef` |
+|--|---------|-------------|
+| Used in | Function components | Class components (or dynamic arrays) |
+| Persistence | Same object across renders | New object on every render |
+| Recommended | ✅ Yes (function components) | Only for class components |
+
+```js
+// useRef — persists the same {current} object
+const ref = useRef(null); // always same object, current is mutable
+
+// createRef — creates a new ref object every time
+class MyClass extends React.Component {
+  constructor(props) {
+    super(props);
+    this.inputRef = createRef(); // created once in constructor
+  }
+}
+
+// Dynamic ref list (where createRef is still useful)
+const MyList = ({ items }) => {
+  const refs = useRef(items.map(() => createRef()));
+  // ...
+};
+```
+
+---
+
+### Q127. What is reconciliation key strategy for animated lists?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Performance
+
+**Answer:**
+When items are added/removed from an animated list, the `key` prop determines whether React reuses or remounts components — directly affecting animation behaviour.
+
+```js
+// Scenario: removing an item with a fade-out animation
+
+// ❌ Using index as key — React reuses wrong component, animation breaks
+<FlatList keyExtractor={(_, index) => index.toString()} />
+
+// ✅ Using stable ID — React correctly identifies the removed item
+<FlatList keyExtractor={(item) => item.id.toString()} />
+
+// Animated list with enter/exit animations using react-native-reanimated
+const AnimatedItem = ({ item, onRemove }) => {
+  const opacity = useSharedValue(0);
+  const height = useSharedValue(0);
+
+  // Fade in on mount
+  useEffect(() => {
+    opacity.value = withTiming(1, { duration: 300 });
+    height.value = withTiming(ITEM_HEIGHT, { duration: 300 });
+  }, []);
+
+  const handleRemove = () => {
+    // Animate out before removing from data
+    opacity.value = withTiming(0, { duration: 200 });
+    height.value = withTiming(0, { duration: 200 }, () => {
+      runOnJS(onRemove)(item.id); // call on JS thread after animation
+    });
+  };
+
+  const style = useAnimatedStyle(() => ({
+    opacity: opacity.value,
+    height: height.value,
+    overflow: 'hidden',
+  }));
+
+  return (
+    <Animated.View style={style}>
+      <Pressable onPress={handleRemove}>
+        <Text>{item.title}</Text>
+      </Pressable>
+    </Animated.View>
+  );
+};
+```
+
+---
+
+### Q128. How do you implement infinite carousel / auto-scroll in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** UI Components
+
+**Answer:**
+```js
+import React, { useRef, useEffect, useState } from 'react';
+import { FlatList, Dimensions } from 'react-native';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+const AutoScrollCarousel = ({ items, autoScrollInterval = 3000 }) => {
+  const flatListRef = useRef(null);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const currentIndexRef = useRef(0); // use ref to avoid stale closure in interval
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const nextIndex = (currentIndexRef.current + 1) % items.length;
+      flatListRef.current?.scrollToIndex({ index: nextIndex, animated: true });
+      currentIndexRef.current = nextIndex;
+      setCurrentIndex(nextIndex);
+    }, autoScrollInterval);
+
+    return () => clearInterval(id);
+  }, [items.length, autoScrollInterval]);
+
+  const onMomentumScrollEnd = (e) => {
+    const index = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
+    currentIndexRef.current = index;
+    setCurrentIndex(index);
+  };
+
+  return (
+    <View>
+      <FlatList
+        ref={flatListRef}
+        data={items}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        keyExtractor={(_, i) => i.toString()}
+        renderItem={({ item }) => (
+          <View style={{ width: SCREEN_WIDTH }}>
+            <Image source={{ uri: item.image }} style={{ width: SCREEN_WIDTH, height: 200 }} />
+          </View>
+        )}
+        onMomentumScrollEnd={onMomentumScrollEnd}
+        getItemLayout={(_, index) => ({
+          length: SCREEN_WIDTH, offset: SCREEN_WIDTH * index, index
+        })}
+      />
+      {/* Dots indicator */}
+      <View style={styles.dotsRow}>
+        {items.map((_, i) => (
+          <View key={i} style={[styles.dot, i === currentIndex && styles.activeDot]} />
+        ))}
+      </View>
+    </View>
+  );
+};
+```
+
+---
+
+### Q129. What is `runOnJS` in Reanimated 2?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Reanimated
+
+**Answer:**
+`runOnJS` is a Reanimated utility that calls a JavaScript function from a worklet (UI thread code). Since worklets run on the UI thread, they cannot directly call JS functions — `runOnJS` bridges the gap.
+
+**Code:**
+```js
+import { runOnJS } from 'react-native-reanimated';
+
+const MyComponent = ({ onSwipeComplete }) => {
+  const translateX = useSharedValue(0);
+
+  const gesture = Gesture.Pan()
+    .onEnd((event) => {
+      // We're on the UI thread here (worklet context)
+      if (event.translationX > 150) {
+        // ✅ Call JS function from UI thread
+        runOnJS(onSwipeComplete)('right');
+        // ❌ Cannot call onSwipeComplete directly — it's a JS function
+      }
+      translateX.value = withSpring(0);
+    });
+
+  // Another common pattern: update React state from a worklet
+  const [direction, setDirection] = useState('none');
+
+  const panGesture = Gesture.Pan()
+    .onUpdate((e) => {
+      runOnJS(setDirection)(e.translationX > 0 ? 'right' : 'left');
+    });
+};
+
+// runOnUI — opposite direction: call a worklet from JS thread
+import { runOnUI } from 'react-native-reanimated';
+
+const triggerAnimation = () => {
+  runOnUI(() => {
+    'worklet';
+    sharedValue.value = withSpring(100); // runs on UI thread
+  })();
+};
+```
+
+**Follow-up:** Is `runOnJS` expensive? → It schedules a message from the UI thread back to the JS thread — slightly more expensive than pure worklet calls. Minimise `runOnJS` calls in hot paths (like `onUpdate` — prefer `onEnd`).
+
+---
+
+### Q130. How do you handle biometric authentication in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Security / Native APIs
+
+**Answer:**
+Use `react-native-biometrics` or `react-native-keychain` for biometric (Face ID / Fingerprint) authentication.
+
+**Code:**
+```js
+import ReactNativeBiometrics, { BiometryTypes } from 'react-native-biometrics';
+
+const rnBiometrics = new ReactNativeBiometrics();
+
+// Check what biometrics are available
+const checkBiometrics = async () => {
+  const { available, biometryType } = await rnBiometrics.isSensorAvailable();
+
+  if (available && biometryType === BiometryTypes.TouchID) {
+    console.log('TouchID available');
+  } else if (available && biometryType === BiometryTypes.FaceID) {
+    console.log('FaceID available');
+  } else if (available && biometryType === BiometryTypes.Biometrics) {
+    console.log('Android fingerprint available');
+  } else {
+    console.log('Biometrics not available');
+  }
+};
+
+// Authenticate
+const authenticateWithBiometrics = async () => {
+  try {
+    const { success, error } = await rnBiometrics.simplePrompt({
+      promptMessage: 'Confirm fingerprint',
+      cancelButtonText: 'Use PIN instead',
+    });
+
+    if (success) {
+      // Retrieve stored token from Keychain
+      const credentials = await Keychain.getGenericPassword();
+      if (credentials) {
+        await dispatch(loginWithToken(credentials.password));
+      }
+    }
+  } catch (error) {
+    console.log('Biometric auth failed:', error);
+    // Fall back to PIN/password
+    navigation.navigate('PINLogin');
+  }
+};
+
+// Store token securely after normal login (to be retrieved with biometrics later)
+const storeTokenForBiometrics = async (token) => {
+  await Keychain.setGenericPassword('user', token, {
+    accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_ANY,
+    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED,
+  });
+};
+```
+
+**Where this applies to your work:** In the Debt Relief India fintech app, biometric authentication could gate access to sensitive financial data — the token is stored in the Keychain (encrypted, hardware-backed on supported devices) and only retrieved after successful biometric verification.
+
+---
+
+## Sections Overview (Q131–Q500)
 
 | Section | Questions | Topics |
 |---------|-----------|--------|
-| Hooks continued | Q101–Q130 | useId, useSyncExternalStore, React 18 hooks |
 | Styling & Layout | Q131–Q175 | Advanced Flexbox, responsive design, dimensions |
 | Animations | Q176–Q230 | Reanimated deep dive, gesture + animation combos |
 | Performance | Q231–Q290 | Memory leaks, profiling, bundle optimisation |
