@@ -13104,3 +13104,3874 @@ trackPerformance('screen_load', {
 ---
 
 *Part 01 of 8 — [← Back to Part README](./README.md) · [← Main README](../README.md)*
+
+## Section 8: Native Modules (Q291–Q340)
+
+---
+
+### Q291. What is a Native Module in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Native Modules
+
+**Answer:**
+A Native Module is a bridge between JavaScript and platform-specific native code (Swift/Objective-C on iOS, Kotlin/Java on Android). Use them when React Native's built-in APIs don't expose the functionality you need.
+
+**When you need a native module:**
+- Access platform APIs with no JS equivalent (biometrics, Bluetooth, camera hardware features)
+- Use existing native SDKs (Razorpay, Sentry native, Firebase)
+- Perform CPU-intensive work in native (encryption, image processing)
+- Synchronous native operations (MMKV, SQLite)
+
+```
+JavaScript                   Native
+─────────────────            ─────────────────
+import { NativeModules }     // iOS: @objc class BiometricModule: NSObject
+const { BiometricModule }    // Android: class BiometricModule : ReactContextBaseJavaModule
+  = NativeModules;
+BiometricModule
+  .authenticate()
+  .then(success => ...)      → native SDK call → result back to JS
+```
+
+**Old Architecture:** Modules communicate over the async Bridge (JSON serialisation).
+**New Architecture (TurboModules):** Modules are called synchronously via JSI with TypeScript-generated type-safe interfaces.
+
+```js
+// Consuming a native module in JS
+import { NativeModules } from 'react-native';
+const { DeviceSecurityModule } = NativeModules;
+
+// Call native method
+const isSecure = await DeviceSecurityModule.isDeviceSecure();
+
+// Or wrap in a JS module for a clean API
+export const DeviceSecurity = {
+  isSecure: () => DeviceSecurityModule.isDeviceSecure(),
+  hasBiometrics: () => DeviceSecurityModule.hasBiometrics(),
+};
+```
+
+**Follow-up:** What's the difference between a Native Module and a Native Component? → Native Module exposes methods/functions to JS. Native Component (View Manager) exposes a native UI component (like `<MapView>` or `<WebView>`) as a React component.
+
+---
+
+### Q292. How do you create a Native Module on Android (Kotlin)?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Very High | **Category:** Native Modules — Android
+
+**Answer:**
+Three files needed: the module class, a package class, and registration in `MainApplication`.
+
+```kotlin
+// Step 1: Create the module
+// android/app/src/main/java/com/yourapp/DeviceInfoModule.kt
+
+package com.yourapp
+
+import com.facebook.react.bridge.*
+import android.os.Build
+
+class DeviceInfoModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext) {
+
+    // Name exposed to JavaScript: NativeModules.DeviceInfo
+    override fun getName() = "DeviceInfo"
+
+    // Synchronous method — returns value directly (no callback/promise)
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun getDeviceName(): String {
+        return "${Build.MANUFACTURER} ${Build.MODEL}"
+    }
+
+    // Async method with Promise
+    @ReactMethod
+    fun getBatteryLevel(promise: Promise) {
+        try {
+            val batteryManager = reactApplicationContext
+                .getSystemService(android.content.Context.BATTERY_SERVICE)
+                as android.os.BatteryManager
+            val level = batteryManager.getIntProperty(
+                android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY
+            )
+            promise.resolve(level)
+        } catch (e: Exception) {
+            promise.reject("BATTERY_ERROR", e.message, e)
+        }
+    }
+
+    // Method with callback
+    @ReactMethod
+    fun isRooted(callback: Callback) {
+        val isRooted = checkIfRooted()
+        callback.invoke(null, isRooted) // (error, result)
+    }
+
+    // Method that returns a Map (JS object)
+    @ReactMethod
+    fun getDeviceInfo(promise: Promise) {
+        val map = Arguments.createMap().apply {
+            putString("manufacturer", Build.MANUFACTURER)
+            putString("model", Build.MODEL)
+            putInt("sdkVersion", Build.VERSION.SDK_INT)
+            putString("androidVersion", Build.VERSION.RELEASE)
+        }
+        promise.resolve(map)
+    }
+
+    // Expose constants to JS (available synchronously without method call)
+    override fun getConstants(): Map<String, Any> = mapOf(
+        "DEVICE_NAME" to "${Build.MANUFACTURER} ${Build.MODEL}",
+        "OS_VERSION" to Build.VERSION.RELEASE,
+        "SDK_INT" to Build.VERSION.SDK_INT,
+    )
+}
+```
+
+```kotlin
+// Step 2: Create the package
+// android/app/src/main/java/com/yourapp/DeviceInfoPackage.kt
+
+package com.yourapp
+
+import com.facebook.react.ReactPackage
+import com.facebook.react.bridge.NativeModule
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.uimanager.ViewManager
+
+class DeviceInfoPackage : ReactPackage {
+    override fun createNativeModules(context: ReactApplicationContext):
+        List<NativeModule> = listOf(DeviceInfoModule(context))
+
+    override fun createViewManagers(context: ReactApplicationContext):
+        List<ViewManager<*, *>> = emptyList()
+}
+```
+
+```kotlin
+// Step 3: Register in MainApplication.kt
+override fun getPackages(): List<ReactPackage> =
+    PackageList(this).packages.apply {
+        add(DeviceInfoPackage())  // ← add your package
+    }
+```
+
+---
+
+### Q293. How do you create a Native Module on iOS (Swift)?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Very High | **Category:** Native Modules — iOS
+
+**Answer:**
+```swift
+// Step 1: Create the Swift module
+// ios/DeviceInfoModule.swift
+
+import Foundation
+
+@objc(DeviceInfoModule)
+class DeviceInfoModule: NSObject {
+
+  // requiresMainQueueSetup — return true if module uses UI APIs
+  @objc static func requiresMainQueueSetup() -> Bool { return false }
+
+  // Async method with Promise
+  @objc func getBatteryLevel(
+    _ resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    UIDevice.current.isBatteryMonitoringEnabled = true
+    let level = UIDevice.current.batteryLevel
+    if level < 0 {
+      reject("BATTERY_ERROR", "Could not get battery level", nil)
+    } else {
+      resolve(Int(level * 100))
+    }
+  }
+
+  // Sync method (use sparingly — blocks JS thread)
+  @objc func getDeviceName() -> String {
+    return UIDevice.current.name
+  }
+
+  // Returns a NSDictionary (JS object)
+  @objc func getDeviceInfo(
+    _ resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    let info: [String: Any] = [
+      "name": UIDevice.current.name,
+      "model": UIDevice.current.model,
+      "systemVersion": UIDevice.current.systemVersion,
+      "identifierForVendor": UIDevice.current.identifierForVendor?.uuidString ?? "",
+    ]
+    resolve(info)
+  }
+}
+```
+
+```objc
+// Step 2: Expose to React Native via Objective-C bridge header
+// ios/DeviceInfoModule.m
+
+#import <React/RCTBridgeModule.h>
+
+@interface RCT_EXTERN_MODULE(DeviceInfoModule, NSObject)
+
+RCT_EXTERN_METHOD(
+  getBatteryLevel:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+)
+
+RCT_EXTERN_METHOD(getDeviceName)
+
+RCT_EXTERN_METHOD(
+  getDeviceInfo:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+)
+
+@end
+```
+
+```swift
+// Step 3: Bridging header (if not already present)
+// ios/YourApp-Bridging-Header.h
+#import <React/RCTBridgeModule.h>
+#import <React/RCTEventEmitter.h>
+```
+
+---
+
+### Q294. How do you send events from Native to JavaScript?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Native Events
+
+**Answer:**
+Use `RCTEventEmitter` (iOS) or `RCTDeviceEventEmitter` (Android) to push events from native code to JavaScript.
+
+```kotlin
+// Android — emit events from native to JS
+// DeviceEventModule.kt
+
+class SensorModule(private val reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext) {
+
+    override fun getName() = "SensorModule"
+
+    // Send event to JS
+    private fun sendEvent(eventName: String, params: WritableMap?) {
+        reactContext
+            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit(eventName, params)
+    }
+
+    @ReactMethod
+    fun startListening() {
+        // Start native sensor (e.g., accelerometer)
+        sensorManager.registerListener(object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent) {
+                val params = Arguments.createMap().apply {
+                    putDouble("x", event.values[0].toDouble())
+                    putDouble("y", event.values[1].toDouble())
+                    putDouble("z", event.values[2].toDouble())
+                    putDouble("timestamp", System.currentTimeMillis().toDouble())
+                }
+                sendEvent("onAccelerometerUpdate", params)
+            }
+            override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
+        }, accelerometer, SensorManager.SENSOR_DELAY_UI)
+    }
+
+    @ReactMethod
+    fun stopListening() { sensorManager.unregisterListener(listener) }
+
+    // Required for addListener/removeListeners (new arch compatibility)
+    @ReactMethod fun addListener(eventName: String) {}
+    @ReactMethod fun removeListeners(count: Int) {}
+}
+```
+
+```swift
+// iOS — RCTEventEmitter
+// SensorModule.swift
+
+@objc(SensorModule)
+class SensorModule: RCTEventEmitter {
+
+    // Declare all event names
+    override func supportedEvents() -> [String]! {
+        return ["onAccelerometerUpdate", "onGyroUpdate"]
+    }
+
+    override static func requiresMainQueueSetup() -> Bool { return false }
+
+    @objc func startListening() {
+        motionManager.startAccelerometerUpdates(to: .main) { [weak self] data, error in
+            guard let data = data else { return }
+            self?.sendEvent(withName: "onAccelerometerUpdate", body: [
+                "x": data.acceleration.x,
+                "y": data.acceleration.y,
+                "z": data.acceleration.z,
+            ])
+        }
+    }
+
+    @objc func stopListening() { motionManager.stopAccelerometerUpdates() }
+}
+```
+
+```js
+// JavaScript — listen for native events
+import { NativeEventEmitter, NativeModules } from 'react-native';
+const { SensorModule } = NativeModules;
+const emitter = new NativeEventEmitter(SensorModule);
+
+const useSensor = () => {
+  const [reading, setReading] = useState({ x: 0, y: 0, z: 0 });
+
+  useEffect(() => {
+    SensorModule.startListening();
+
+    const subscription = emitter.addListener('onAccelerometerUpdate', (data) => {
+      setReading(data);
+    });
+
+    return () => {
+      SensorModule.stopListening();
+      subscription.remove(); // ALWAYS clean up
+    };
+  }, []);
+
+  return reading;
+};
+```
+
+---
+
+### Q295. What are the data types you can pass between JS and Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Native Modules
+
+**Answer:**
+```
+JavaScript Type    →    Android (Kotlin/Java)    →    iOS (Swift/ObjC)
+─────────────────────────────────────────────────────────────────────
+null/undefined          null                         nil
+boolean                 Boolean                      Bool / NSNumber
+number (int)            Int                          Int / NSInteger
+number (double)         Double                       Double
+string                  String                       String / NSString
+array                   ReadableArray                NSArray
+object                  ReadableMap                  NSDictionary
+function/callback       Callback                     RCTResponseSenderBlock
+Promise                 Promise                      RCTPromiseResolveBlock
+```
+
+```kotlin
+// Android: Creating nested structures to return to JS
+@ReactMethod
+fun getEmployeeData(id: Int, promise: Promise) {
+    val employee = Arguments.createMap().apply {
+        putInt("id", id)
+        putString("name", "Devesh Kumar")
+        putDouble("salary", 850000.0)
+        putBoolean("active", true)
+        putNull("terminationDate")
+
+        // Nested object
+        val address = Arguments.createMap().apply {
+            putString("city", "New Delhi")
+            putString("state", "Delhi")
+        }
+        putMap("address", address)
+
+        // Array
+        val skills = Arguments.createArray().apply {
+            pushString("React Native")
+            pushString("Kotlin")
+            pushString("Swift")
+        }
+        putArray("skills", skills)
+    }
+    promise.resolve(employee)
+}
+```
+
+```swift
+// iOS: Equivalent structure
+@objc func getEmployeeData(_ id: Int,
+  resolver resolve: @escaping RCTPromiseResolveBlock,
+  rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let employee: [String: Any] = [
+        "id": id,
+        "name": "Devesh Kumar",
+        "salary": 850000.0,
+        "active": true,
+        "terminationDate": NSNull(),
+        "address": ["city": "New Delhi", "state": "Delhi"],
+        "skills": ["React Native", "Kotlin", "Swift"],
+    ]
+    resolve(employee)
+}
+```
+
+---
+
+### Q296. What is the difference between Callbacks and Promises in Native Modules?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Native Modules
+
+**Answer:**
+```kotlin
+// Callbacks — older API, fire once, can send multiple values
+// Android
+@ReactMethod
+fun checkPermission(callback: Callback) {
+    val granted = hasPermission()
+    callback.invoke(null, granted)  // (error, result)
+    // or on error: callback.invoke("PERMISSION_ERROR", null)
+}
+
+// Promises — modern API, cleaner, chainable in JS
+@ReactMethod
+fun checkPermissionAsync(promise: Promise) {
+    try {
+        val granted = hasPermission()
+        promise.resolve(granted)
+    } catch (e: SecurityException) {
+        promise.reject("PERMISSION_ERROR", "Permission check failed", e)
+    }
+}
+
+// Calling from JS:
+// Callback style (messy):
+DeviceModule.checkPermission((error, granted) => {
+    if (error) { handleError(error); return; }
+    setGranted(granted);
+});
+
+// Promise style (clean async/await):
+try {
+    const granted = await DeviceModule.checkPermissionAsync();
+    setGranted(granted);
+} catch (error) {
+    handleError(error);
+}
+```
+
+**Rules:**
+- A Promise can only be resolved or rejected **once** — calling resolve/reject again crashes on Android
+- A Callback can technically be called multiple times but should only be called once (use events for recurring data)
+- For streaming/repeated data → use events (Q294)
+- **Never** pass a callback across the bridge and store it in native — it creates a memory leak
+
+---
+
+### Q297. How do you handle threading in Native Modules?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Native Modules
+
+**Answer:**
+```kotlin
+// Android — by default @ReactMethod runs on a background JS thread
+// For UI work: must dispatch to main thread
+
+@ReactMethod
+fun showNativeDialog(message: String, promise: Promise) {
+    // ❌ Crashes — can't update UI from background thread
+    AlertDialog.Builder(currentActivity).show()
+
+    // ✅ Run on main thread
+    currentActivity?.runOnUiThread {
+        AlertDialog.Builder(currentActivity)
+            .setMessage(message)
+            .setPositiveButton("OK") { _, _ -> promise.resolve(true) }
+            .setNegativeButton("Cancel") { _, _ -> promise.resolve(false) }
+            .show()
+    }
+}
+
+// Override getMethodCallHandler to specify thread
+override fun getName() = "MyModule"
+// Default: all @ReactMethod calls are dispatched to the JS/module thread
+// To run on main thread: @UiThread annotation (use sparingly)
+
+@UiThread
+@ReactMethod
+fun updateNativeUI(color: String) {
+    // Runs on UI thread automatically
+    currentActivity?.window?.statusBarColor = Color.parseColor(color)
+}
+```
+
+```swift
+// iOS — default thread depends on requiresMainQueueSetup
+// requiresMainQueueSetup = false → calls on background module queue
+// requiresMainQueueSetup = true  → calls on main thread
+
+// For UI work from background module:
+@objc func presentCamera(_ resolve: @escaping RCTPromiseResolveBlock,
+                          rejecter reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.main.async { [weak self] in
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        self?.bridge.viewControllerForPresentingModal?.present(picker, animated: true) {
+            resolve(true)
+        }
+    }
+}
+
+// methodQueue — override to run all methods on a specific queue
+@objc override var methodQueue: DispatchQueue {
+    return DispatchQueue.main  // all methods run on main thread
+}
+// Use for modules that are primarily UI-related
+```
+
+---
+
+### Q298. What is a TurboModule and how does it differ from a classic Native Module?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** New Architecture
+
+**Answer:**
+TurboModules are the New Architecture replacement for classic Native Modules. They use JSI (JavaScript Interface) instead of the Bridge.
+
+| | Classic Native Module | TurboModule |
+|--|----------------------|------------|
+| Communication | Async Bridge (JSON) | Synchronous JSI |
+| Loading | All modules at startup | Lazy (on first use) |
+| Type safety | No (stringly-typed) | Yes (Codegen from TypeScript spec) |
+| Performance | Bridge overhead | Near-zero overhead |
+| Threading | Always async to JS | Can be synchronous |
+
+```typescript
+// Step 1: Define the TypeScript spec (Codegen input)
+// js/NativeDeviceInfo.ts
+
+import type { TurboModule } from 'react-native';
+import { TurboModuleRegistry } from 'react-native';
+
+export interface Spec extends TurboModule {
+  // Codegen generates native bindings from these signatures
+  getDeviceName(): string;
+  getBatteryLevel(): Promise<number>;
+  getDeviceInfo(): Promise<{
+    name: string;
+    model: string;
+    systemVersion: string;
+  }>;
+  addListener(eventName: string): void;
+  removeListeners(count: number): void;
+}
+
+export default TurboModuleRegistry.getEnforcing<Spec>('DeviceInfo');
+```
+
+```kotlin
+// Step 2: Implement on Android (Kotlin)
+// Codegen generates NativeDeviceInfoSpec.kt — implement it
+class DeviceInfoModule(context: ReactApplicationContext)
+    : NativeDeviceInfoSpec(context) {
+
+    override fun getName() = NAME
+
+    override fun getDeviceName() = "${Build.MANUFACTURER} ${Build.MODEL}"
+
+    override fun getBatteryLevel(promise: Promise) {
+        // ... implementation
+    }
+
+    companion object {
+        const val NAME = "DeviceInfo"
+    }
+}
+```
+
+```swift
+// iOS: Codegen generates RCTNativeDeviceInfoSpec — implement it
+@objc class DeviceInfoModule: NSObject, RCTNativeDeviceInfoSpec {
+    func getDeviceName() -> String { UIDevice.current.name }
+    func getBatteryLevel(_ resolve: @escaping RCTPromiseResolveBlock,
+                         rejecter reject: @escaping RCTPromiseRejectBlock) { ... }
+}
+```
+
+---
+
+### Q299. What is Codegen in the New Architecture?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** New Architecture
+
+**Answer:**
+Codegen is the build-time code generation tool that reads TypeScript/Flow specifications and generates native type-safe C++/Kotlin/Swift interfaces. It eliminates runtime type errors in native modules.
+
+```typescript
+// You write this (TypeScript spec):
+// NativeMyModule.ts
+import type { TurboModule } from 'react-native';
+import { TurboModuleRegistry } from 'react-native';
+
+export interface Spec extends TurboModule {
+  multiply(a: number, b: number): number;
+  fetchData(url: string): Promise<string>;
+}
+
+export default TurboModuleRegistry.getEnforcing<Spec>('MyModule');
+```
+
+```
+Codegen at build time generates:
+─────────────────────────────────────
+iOS:      RCTNativeMyModuleSpec.h/.mm  (Objective-C protocol)
+Android:  NativeMyModuleSpec.kt         (abstract Kotlin class)
+C++:      NativeMyModule-generated.cpp  (JSI binding)
+```
+
+```kotlin
+// You implement the generated spec:
+class MyModule(context: ReactApplicationContext) : NativeMyModuleSpec(context) {
+    override fun getName() = "MyModule"
+
+    // Type-checked at compile time — must match spec
+    override fun multiply(a: Double, b: Double): Double = a * b
+
+    override fun fetchData(url: String, promise: Promise) {
+        // ... implementation
+    }
+}
+```
+
+**Benefits:**
+- Compile-time type safety — wrong types fail at build, not runtime
+- No `NativeModules.MyModule.someMethod()` stringly-typed calls
+- Better IDE support — autocomplete on native methods from TS types
+- Faster builds — generated code is optimised
+
+---
+
+### Q300. How do you handle errors in Native Modules?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Native Modules
+
+**Answer:**
+```kotlin
+// Android — error handling patterns
+
+// 1. Promise.reject with error code, message, and throwable
+@ReactMethod
+fun readSecureStorage(key: String, promise: Promise) {
+    try {
+        val value = secureStorage.get(key)
+            ?: return promise.reject("KEY_NOT_FOUND", "No value for key: $key")
+        promise.resolve(value)
+    } catch (e: SecurityException) {
+        promise.reject("SECURITY_ERROR", "Access denied: ${e.message}", e)
+    } catch (e: Exception) {
+        promise.reject("UNKNOWN_ERROR", e.message, e)
+    }
+}
+
+// 2. Consistent error codes (define as constants)
+companion object {
+    const val E_KEY_NOT_FOUND = "KEY_NOT_FOUND"
+    const val E_SECURITY = "SECURITY_ERROR"
+    const val E_NETWORK = "NETWORK_ERROR"
+}
+```
+
+```swift
+// iOS — error handling
+@objc func readSecureStorage(_ key: String,
+    resolver resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock) {
+
+    guard !key.isEmpty else {
+        reject("INVALID_KEY", "Key cannot be empty", nil)
+        return
+    }
+
+    let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrAccount as String: key,
+        kSecReturnData as String: true,
+    ]
+
+    var result: AnyObject?
+    let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+    switch status {
+    case errSecSuccess:
+        guard let data = result as? Data,
+              let value = String(data: data, encoding: .utf8) else {
+            reject("DECODE_ERROR", "Failed to decode stored value", nil)
+            return
+        }
+        resolve(value)
+    case errSecItemNotFound:
+        reject("KEY_NOT_FOUND", "No value for key: \(key)", nil)
+    default:
+        reject("KEYCHAIN_ERROR", "Keychain error: \(status)", nil)
+    }
+}
+```
+
+```js
+// JavaScript — catching native errors
+const readSecure = async (key) => {
+    try {
+        const value = await SecureStorageModule.readSecureStorage(key);
+        return value;
+    } catch (error) {
+        switch (error.code) {
+            case 'KEY_NOT_FOUND':
+                return null; // expected — key doesn't exist
+            case 'SECURITY_ERROR':
+                throw new Error('Biometric authentication required');
+            default:
+                Sentry.captureException(error);
+                throw error;
+        }
+    }
+};
+```
+
+---
+
+### Q301. How do you write a Native Module for biometric authentication?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Native Modules — Real World
+
+**Answer:**
+```kotlin
+// Android — BiometricModule.kt
+package com.yourapp
+
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.core.content.ContextCompat
+import com.facebook.react.bridge.*
+
+class BiometricModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext) {
+
+    override fun getName() = "BiometricModule"
+
+    @ReactMethod
+    fun canAuthenticate(promise: Promise) {
+        val manager = BiometricManager.from(reactApplicationContext)
+        val result = manager.canAuthenticate(
+            BiometricManager.Authenticators.BIOMETRIC_STRONG or
+            BiometricManager.Authenticators.DEVICE_CREDENTIAL
+        )
+        when (result) {
+            BiometricManager.BIOMETRIC_SUCCESS -> promise.resolve("BIOMETRIC_AVAILABLE")
+            BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> promise.resolve("NO_HARDWARE")
+            BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE -> promise.resolve("HW_UNAVAILABLE")
+            BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> promise.resolve("NONE_ENROLLED")
+            else -> promise.resolve("UNKNOWN")
+        }
+    }
+
+    @ReactMethod
+    fun authenticate(title: String, subtitle: String, promise: Promise) {
+        val activity = currentActivity ?: return promise.reject("NO_ACTIVITY", "No activity")
+        val executor = ContextCompat.getMainExecutor(reactApplicationContext)
+
+        activity.runOnUiThread {
+            val callback = object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    promise.resolve(true)
+                }
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    when (errorCode) {
+                        BiometricPrompt.ERROR_USER_CANCELED,
+                        BiometricPrompt.ERROR_NEGATIVE_BUTTON -> promise.resolve(false)
+                        else -> promise.reject("AUTH_ERROR", errString.toString())
+                    }
+                }
+                override fun onAuthenticationFailed() {
+                    // Called when biometric doesn't match — NOT a rejection
+                    // The prompt continues showing
+                }
+            }
+
+            val promptInfo = BiometricPrompt.PromptInfo.Builder()
+                .setTitle(title)
+                .setSubtitle(subtitle)
+                .setAllowedAuthenticators(
+                    BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                    BiometricManager.Authenticators.DEVICE_CREDENTIAL
+                )
+                .build()
+
+            BiometricPrompt(activity as androidx.fragment.app.FragmentActivity, executor, callback)
+                .authenticate(promptInfo)
+        }
+    }
+}
+```
+
+```swift
+// iOS — BiometricModule.swift
+import LocalAuthentication
+
+@objc(BiometricModule)
+class BiometricModule: NSObject {
+
+    @objc static func requiresMainQueueSetup() -> Bool { false }
+
+    @objc func canAuthenticate(_ resolve: @escaping RCTPromiseResolveBlock,
+                                rejecter reject: @escaping RCTPromiseRejectBlock) {
+        let context = LAContext()
+        var error: NSError?
+        let canEval = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics,
+                                                error: &error)
+        if canEval {
+            resolve(context.biometryType == .faceID ? "FACE_ID" : "TOUCH_ID")
+        } else {
+            resolve("NONE")
+        }
+    }
+
+    @objc func authenticate(_ reason: String,
+                             resolver resolve: @escaping RCTPromiseResolveBlock,
+                             rejecter reject: @escaping RCTPromiseRejectBlock) {
+        let context = LAContext()
+        context.evaluatePolicy(
+            .deviceOwnerAuthenticationWithBiometrics,
+            localizedReason: reason
+        ) { success, error in
+            if success {
+                resolve(true)
+            } else if let err = error as? LAError {
+                switch err.code {
+                case .userCancel, .userFallback, .systemCancel:
+                    resolve(false)
+                default:
+                    reject("AUTH_ERROR", err.localizedDescription, err)
+                }
+            }
+        }
+    }
+}
+```
+
+```js
+// JavaScript wrapper
+import { NativeModules, Platform } from 'react-native';
+const { BiometricModule } = NativeModules;
+
+export const Biometric = {
+    canAuthenticate: () => BiometricModule.canAuthenticate(),
+    authenticate: (reason = 'Verify your identity') =>
+        BiometricModule.authenticate(reason, Platform.OS === 'android' ? reason : undefined),
+};
+```
+
+---
+
+### Q302. How do you implement a Native View Component?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Native View Managers
+
+**Answer:**
+A Native View Component exposes a native UI widget as a React component — like `<MapView>`, `<VideoPlayer>`, or `<SignaturePad>`.
+
+```kotlin
+// Android — Custom NativeView example: a native SignatureView
+
+// 1. Custom Android View
+class SignatureView(context: Context) : View(context) {
+    private val path = Path()
+    private val paint = Paint().apply {
+        color = Color.BLACK; strokeWidth = 4f; style = Paint.Style.STROKE
+    }
+    var onSignatureChange: ((String) -> Unit)? = null
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> path.moveTo(event.x, event.y)
+            MotionEvent.ACTION_MOVE -> {
+                path.lineTo(event.x, event.y)
+                onSignatureChange?.invoke(exportSignatureAsBase64())
+                invalidate()
+            }
+        }
+        return true
+    }
+    override fun onDraw(canvas: Canvas) { canvas.drawPath(path, paint) }
+    fun clear() { path.reset(); invalidate() }
+    private fun exportSignatureAsBase64(): String { /* ... */ return "" }
+}
+
+// 2. ViewManager
+class SignatureViewManager : SimpleViewManager<SignatureView>() {
+    override fun getName() = "SignatureView"
+    override fun createViewInstance(context: ThemedReactContext) = SignatureView(context)
+
+    // Expose prop to JS: strokeColor
+    @ReactProp(name = "strokeColor")
+    fun setStrokeColor(view: SignatureView, color: Int) {
+        view.paint.color = color
+    }
+
+    // Fire JS event: onSignatureChange
+    override fun getExportedCustomBubblingEventTypeConstants() = mapOf(
+        "onSignatureChange" to mapOf(
+            "phasedRegistrationNames" to mapOf(
+                "bubbled" to "onSignatureChange",
+                "captured" to "onSignatureChangeCapture"
+            )
+        )
+    )
+
+    // Expose commands (callable from JS ref)
+    override fun getCommandsMap() = mapOf("clear" to 0)
+
+    override fun receiveCommand(view: SignatureView, commandId: String, args: ReadableArray?) {
+        if (commandId == "clear") view.clear()
+    }
+}
+```
+
+```js
+// JavaScript wrapper
+import { requireNativeComponent, UIManager, findNodeHandle } from 'react-native';
+
+const NativeSignatureView = requireNativeComponent('SignatureView');
+
+const SignaturePad = React.forwardRef(({ strokeColor = '#000', onSignatureChange, style }, ref) => {
+    const nativeRef = useRef(null);
+
+    // Expose clear() to parent via ref
+    useImperativeHandle(ref, () => ({
+        clear: () => {
+            UIManager.dispatchViewManagerCommand(
+                findNodeHandle(nativeRef.current),
+                UIManager.SignatureView.Commands.clear,
+                []
+            );
+        },
+    }));
+
+    return (
+        <NativeSignatureView
+            ref={nativeRef}
+            strokeColor={processColor(strokeColor)} // processColor converts JS color to native int
+            onSignatureChange={(e) => onSignatureChange?.(e.nativeEvent.signature)}
+            style={style}
+        />
+    );
+});
+
+// Usage
+const sig = useRef(null);
+<SignaturePad
+    ref={sig}
+    strokeColor="#1a1a1a"
+    onSignatureChange={(base64) => console.log('Signed:', base64)}
+    style={{ height: 200, backgroundColor: '#f5f5f5' }}
+/>
+<Button title="Clear" onPress={() => sig.current?.clear()} />
+```
+
+---
+
+### Q303. How do you write a native module that uses the device camera?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Native Modules — Camera
+
+**Answer:**
+```swift
+// iOS — CameraModule.swift
+import UIKit
+import AVFoundation
+
+@objc(CameraModule)
+class CameraModule: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+
+    var resolve: RCTPromiseResolveBlock?
+    var reject: RCTPromiseRejectBlock?
+
+    @objc static func requiresMainQueueSetup() -> Bool { true }
+
+    @objc func openCamera(_ options: NSDictionary,
+                           resolver resolve: @escaping RCTPromiseResolveBlock,
+                           rejecter reject: @escaping RCTPromiseRejectBlock) {
+
+        self.resolve = resolve
+        self.reject = reject
+
+        DispatchQueue.main.async { [weak self] in
+            guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized ||
+                  AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined else {
+                reject("PERMISSION_DENIED", "Camera permission denied", nil)
+                return
+            }
+
+            let picker = UIImagePickerController()
+            picker.sourceType = .camera
+            picker.allowsEditing = options["allowsEditing"] as? Bool ?? false
+            picker.delegate = self
+
+            guard let vc = RCTSharedApplication()?.keyWindow?.rootViewController else {
+                reject("NO_VC", "Could not find view controller", nil)
+                return
+            }
+            vc.present(picker, animated: true)
+        }
+    }
+
+    func imagePickerController(_ picker: UIImagePickerController,
+                                didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+        picker.dismiss(animated: true)
+        guard let image = info[.editedImage] as? UIImage ?? info[.originalImage] as? UIImage else {
+            reject?("NO_IMAGE", "Could not get image", nil)
+            return
+        }
+        guard let data = image.jpegData(compressionQuality: 0.8) else {
+            reject?("ENCODE_ERROR", "Could not encode image", nil)
+            return
+        }
+        let base64 = data.base64EncodedString()
+        resolve?(["base64": base64, "width": image.size.width, "height": image.size.height])
+    }
+
+    func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+        picker.dismiss(animated: true)
+        resolve?(NSNull()) // user cancelled — resolve with null
+    }
+}
+```
+
+---
+
+### Q304. How do you test Native Modules?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Testing + Native Modules
+
+**Answer:**
+```js
+// 1. Mock the native module in Jest
+// __mocks__/react-native.js (or in your Jest setup file)
+jest.mock('react-native', () => {
+    const RN = jest.requireActual('react-native');
+    RN.NativeModules.BiometricModule = {
+        canAuthenticate: jest.fn().mockResolvedValue('FACE_ID'),
+        authenticate: jest.fn().mockResolvedValue(true),
+    };
+    return RN;
+});
+
+// 2. Test your JS wrapper
+import { Biometric } from '../src/modules/Biometric';
+import { NativeModules } from 'react-native';
+
+describe('Biometric', () => {
+    it('returns face id type', async () => {
+        const type = await Biometric.canAuthenticate();
+        expect(type).toBe('FACE_ID');
+        expect(NativeModules.BiometricModule.canAuthenticate).toHaveBeenCalledTimes(1);
+    });
+
+    it('resolves false on user cancel', async () => {
+        NativeModules.BiometricModule.authenticate.mockResolvedValueOnce(false);
+        const result = await Biometric.authenticate('Confirm payment');
+        expect(result).toBe(false);
+    });
+
+    it('rejects on auth error', async () => {
+        NativeModules.BiometricModule.authenticate.mockRejectedValueOnce({
+            code: 'AUTH_ERROR',
+            message: 'Biometric sensor unavailable',
+        });
+        await expect(Biometric.authenticate()).rejects.toMatchObject({
+            code: 'AUTH_ERROR',
+        });
+    });
+});
+
+// 3. Test native code (Android — JUnit)
+// BiometricModuleTest.kt
+@RunWith(RobolectricTestRunner::class)
+class BiometricModuleTest {
+    private lateinit var module: BiometricModule
+    private val context = ApplicationProvider.getApplicationContext<Application>()
+
+    @Before
+    fun setUp() {
+        val reactContext = mock(ReactApplicationContext::class.java)
+        module = BiometricModule(reactContext)
+    }
+
+    @Test
+    fun `getName returns BiometricModule`() {
+        assertEquals("BiometricModule", module.name)
+    }
+}
+```
+
+---
+
+### Q305. How do you create a native module that persists data to the Keychain (iOS) / Keystore (Android)?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Security + Native Modules
+
+**Answer:**
+```swift
+// iOS — Keychain module
+@objc(KeychainModule)
+class KeychainModule: NSObject {
+
+    @objc static func requiresMainQueueSetup() -> Bool { false }
+
+    @objc func setItem(_ key: String,
+                        value: String,
+                        resolver resolve: @escaping RCTPromiseResolveBlock,
+                        rejecter reject: @escaping RCTPromiseRejectBlock) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key,
+            kSecValueData as String: value.data(using: .utf8)!,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+        ]
+        SecItemDelete(query as CFDictionary) // delete if exists
+        let status = SecItemAdd(query as CFDictionary, nil)
+        status == errSecSuccess ? resolve(true) : reject("KEYCHAIN_ERROR", "Save failed: \(status)", nil)
+    }
+
+    @objc func getItem(_ key: String,
+                        resolver resolve: @escaping RCTPromiseResolveBlock,
+                        rejecter reject: @escaping RCTPromiseRejectBlock) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+        switch status {
+        case errSecSuccess:
+            guard let data = result as? Data, let str = String(data: data, encoding: .utf8) else {
+                reject("DECODE_ERROR", "Failed to decode value", nil); return
+            }
+            resolve(str)
+        case errSecItemNotFound:
+            resolve(nil)
+        default:
+            reject("KEYCHAIN_ERROR", "Read failed: \(status)", nil)
+        }
+    }
+
+    @objc func removeItem(_ key: String,
+                           resolver resolve: @escaping RCTPromiseResolveBlock,
+                           rejecter reject: @escaping RCTPromiseRejectBlock) {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                     kSecAttrAccount as String: key]
+        let status = SecItemDelete(query as CFDictionary)
+        resolve(status == errSecSuccess || status == errSecItemNotFound)
+    }
+}
+```
+
+```kotlin
+// Android — EncryptedSharedPreferences (API 23+)
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKeys
+
+class KeystoreModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext) {
+
+    override fun getName() = "KeychainModule"
+
+    private val sharedPreferences by lazy {
+        EncryptedSharedPreferences.create(
+            "secure_prefs",
+            MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC),
+            reactApplicationContext,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+    }
+
+    @ReactMethod
+    fun setItem(key: String, value: String, promise: Promise) {
+        try {
+            sharedPreferences.edit().putString(key, value).apply()
+            promise.resolve(true)
+        } catch (e: Exception) { promise.reject("KEYSTORE_ERROR", e.message, e) }
+    }
+
+    @ReactMethod
+    fun getItem(key: String, promise: Promise) {
+        try {
+            promise.resolve(sharedPreferences.getString(key, null))
+        } catch (e: Exception) { promise.reject("KEYSTORE_ERROR", e.message, e) }
+    }
+
+    @ReactMethod
+    fun removeItem(key: String, promise: Promise) {
+        try {
+            sharedPreferences.edit().remove(key).apply()
+            promise.resolve(true)
+        } catch (e: Exception) { promise.reject("KEYSTORE_ERROR", e.message, e) }
+    }
+}
+```
+
+---
+
+### Q306. How do you handle permissions in a native module?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Permissions + Native Modules
+
+**Answer:**
+```kotlin
+// Android — requesting permissions from within a native module
+
+class CameraPermissionModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext), ActivityEventListener {
+
+    private var permissionPromise: Promise? = null
+    private val CAMERA_PERMISSION_CODE = 1001
+
+    init { reactContext.addActivityEventListener(this) }
+
+    override fun getName() = "CameraPermissionModule"
+
+    @ReactMethod
+    fun requestCameraPermission(promise: Promise) {
+        val activity = currentActivity
+            ?: return promise.reject("NO_ACTIVITY", "No activity found")
+
+        if (ContextCompat.checkSelfPermission(activity, Manifest.permission.CAMERA)
+            == PackageManager.PERMISSION_GRANTED) {
+            promise.resolve("granted")
+            return
+        }
+
+        // Store promise — will be resolved in onActivityResult/onRequestPermissionsResult
+        permissionPromise = promise
+        ActivityCompat.requestPermissions(
+            activity,
+            arrayOf(Manifest.permission.CAMERA),
+            CAMERA_PERMISSION_CODE
+        )
+    }
+
+    // Called when user responds to permission dialog
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<String>, grantResults: IntArray
+    ) {
+        if (requestCode == CAMERA_PERMISSION_CODE) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                permissionPromise?.resolve("granted")
+            } else {
+                val neverAskAgain = !ActivityCompat.shouldShowRequestPermissionRationale(
+                    currentActivity!!, Manifest.permission.CAMERA
+                )
+                permissionPromise?.resolve(if (neverAskAgain) "never_ask_again" else "denied")
+            }
+            permissionPromise = null
+        }
+    }
+
+    override fun onActivityResult(activity: Activity?, requestCode: Int, resultCode: Int, data: Intent?) {}
+    override fun onNewIntent(intent: Intent?) {}
+}
+```
+
+```swift
+// iOS — requesting permissions from Swift module
+@objc func requestCameraPermission(_ resolve: @escaping RCTPromiseResolveBlock,
+                                    rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let status = AVCaptureDevice.authorizationStatus(for: .video)
+
+    switch status {
+    case .authorized:
+        resolve("granted")
+    case .notDetermined:
+        AVCaptureDevice.requestAccess(for: .video) { granted in
+            resolve(granted ? "granted" : "denied")
+        }
+    case .denied:
+        resolve("denied")
+    case .restricted:
+        resolve("restricted")
+    @unknown default:
+        resolve("unknown")
+    }
+}
+```
+
+---
+
+### Q307. How do you implement a native module for network requests with custom certificate pinning?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Security + Networking
+
+**Answer:**
+```kotlin
+// Android — OkHttp with certificate pinning
+class SecureNetworkModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext) {
+
+    override fun getName() = "SecureNetworkModule"
+
+    private val client: OkHttpClient by lazy {
+        val certificatePinner = CertificatePinner.Builder()
+            .add("api.yourbank.com", "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+            .add("api.yourbank.com", "sha256/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=") // backup
+            .build()
+
+        OkHttpClient.Builder()
+            .certificatePinner(certificatePinner)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .build()
+    }
+
+    @ReactMethod
+    fun securePost(url: String, body: String, headers: ReadableMap, promise: Promise) {
+        val requestBody = body.toRequestBody("application/json".toMediaType())
+
+        val requestBuilder = Request.Builder().url(url).post(requestBody)
+        headers.entryIterator.forEach { entry ->
+            requestBuilder.addHeader(entry.key, entry.value as String)
+        }
+
+        Thread {
+            try {
+                val response = client.newCall(requestBuilder.build()).execute()
+                val responseBody = response.body?.string() ?: ""
+                if (response.isSuccessful) {
+                    promise.resolve(responseBody)
+                } else {
+                    promise.reject("HTTP_ERROR", "Status: ${response.code}", null)
+                }
+            } catch (e: javax.net.ssl.SSLPeerUnverifiedException) {
+                promise.reject("PINNING_FAILED", "Certificate pinning verification failed", e)
+            } catch (e: Exception) {
+                promise.reject("NETWORK_ERROR", e.message, e)
+            }
+        }.start()
+    }
+}
+```
+
+---
+
+### Q308. What is `requiresMainQueueSetup` in iOS native modules?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** iOS Native Modules
+
+**Answer:**
+`requiresMainQueueSetup` tells React Native whether the module needs to be initialised on the main (UI) thread. Introduced to fix warnings and improve performance.
+
+```swift
+// Return true if:
+// - Module accesses UIKit APIs during init
+// - Module registers observers for UI events during init
+// - Module accesses window, rootViewController, etc. at startup
+
+@objc(MyUIModule)
+class MyUIModule: NSObject {
+    @objc static func requiresMainQueueSetup() -> Bool {
+        return true  // needs main thread for UIKit
+    }
+    // ...
+}
+
+// Return false if:
+// - Module is purely data/computation (no UIKit during init)
+// - Module only accesses UI APIs when methods are called (dispatch manually)
+
+@objc(DataProcessingModule)
+class DataProcessingModule: NSObject {
+    @objc static func requiresMainQueueSetup() -> Bool {
+        return false  // pure data — no main thread needed at init
+    }
+    // ...
+}
+
+// Best practice: return false by default
+// Only return true when you get the warning:
+// "Module MyModule requires main queue setup since it overrides..."
+// Or when you see crashes related to UI access off main thread
+
+// If false but method needs main thread — dispatch manually:
+@objc func showAlert(_ message: String, resolver resolve: @escaping RCTPromiseResolveBlock, ...) {
+    DispatchQueue.main.async {
+        // UIKit code here
+    }
+}
+```
+
+---
+
+### Q309. How do you create a native module that communicates with Bluetooth?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Native Modules — BLE
+
+**Answer:**
+```kotlin
+// Android — BLE Scanner Module (simplified)
+import android.bluetooth.*
+import android.bluetooth.le.*
+
+class BLEModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext) {
+
+    override fun getName() = "BLEModule"
+
+    private val bluetoothAdapter: BluetoothAdapter? by lazy {
+        (reactApplicationContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)
+            ?.adapter
+    }
+
+    private val discoveredDevices = mutableMapOf<String, BluetoothDevice>()
+
+    @ReactMethod
+    fun startScan(promise: Promise) {
+        val adapter = bluetoothAdapter
+        if (adapter == null || !adapter.isEnabled) {
+            promise.reject("BT_DISABLED", "Bluetooth is disabled")
+            return
+        }
+
+        val scanner = adapter.bluetoothLeScanner
+        val callback = object : ScanCallback() {
+            override fun onScanResult(callbackType: Int, result: ScanResult) {
+                val device = result.device
+                discoveredDevices[device.address] = device
+
+                val params = Arguments.createMap().apply {
+                    putString("id", device.address)
+                    putString("name", device.name ?: "Unknown")
+                    putInt("rssi", result.rssi)
+                }
+                sendEvent("onDeviceDiscovered", params)
+            }
+            override fun onScanFailed(errorCode: Int) {
+                promise.reject("SCAN_FAILED", "Scan failed with code: $errorCode")
+            }
+        }
+
+        scanner.startScan(callback)
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun connectToDevice(deviceId: String, promise: Promise) {
+        val device = discoveredDevices[deviceId]
+            ?: return promise.reject("DEVICE_NOT_FOUND", "Device not found: $deviceId")
+
+        device.connectGatt(reactApplicationContext, false, object : BluetoothGattCallback() {
+            override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+                when (newState) {
+                    BluetoothProfile.STATE_CONNECTED -> {
+                        gatt.discoverServices()
+                        promise.resolve(mapOf("id" to deviceId, "connected" to true))
+                    }
+                    BluetoothProfile.STATE_DISCONNECTED -> {
+                        promise.resolve(mapOf("id" to deviceId, "connected" to false))
+                    }
+                }
+            }
+        })
+    }
+
+    private fun sendEvent(name: String, params: WritableMap) {
+        reactApplicationContext
+            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit(name, params)
+    }
+
+    @ReactMethod fun addListener(name: String) {}
+    @ReactMethod fun removeListeners(count: Int) {}
+}
+```
+
+---
+
+### Q310. How do you implement in-app purchase via a native module?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Native Modules — IAP
+
+**Answer:**
+```kotlin
+// Android — Google Play Billing (simplified)
+import com.android.billingclient.api.*
+
+class IAPModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext), PurchasesUpdatedListener {
+
+    override fun getName() = "IAPModule"
+    private var billingClient: BillingClient? = null
+    private var purchasePromise: Promise? = null
+
+    @ReactMethod
+    fun initBilling(promise: Promise) {
+        billingClient = BillingClient.newBuilder(reactApplicationContext)
+            .setListener(this)
+            .enablePendingPurchases()
+            .build()
+
+        billingClient?.startConnection(object : BillingClientStateListener {
+            override fun onBillingSetupFinished(result: BillingResult) {
+                if (result.responseCode == BillingClient.BillingResponseCode.OK) {
+                    promise.resolve(true)
+                } else {
+                    promise.reject("BILLING_INIT_ERROR", result.debugMessage)
+                }
+            }
+            override fun onBillingServiceDisconnected() {
+                sendEvent("onBillingDisconnected", null)
+            }
+        })
+    }
+
+    @ReactMethod
+    fun purchaseProduct(productId: String, promise: Promise) {
+        purchasePromise = promise
+        val queryParams = QueryProductDetailsParams.newBuilder()
+            .setProductList(listOf(
+                QueryProductDetailsParams.Product.newBuilder()
+                    .setProductId(productId)
+                    .setProductType(BillingClient.ProductType.INAPP)
+                    .build()
+            ))
+            .build()
+
+        billingClient?.queryProductDetailsAsync(queryParams) { result, productList ->
+            if (result.responseCode != BillingClient.BillingResponseCode.OK || productList.isEmpty()) {
+                promise.reject("PRODUCT_NOT_FOUND", "Product $productId not found")
+                purchasePromise = null
+                return@queryProductDetailsAsync
+            }
+
+            val flowParams = BillingFlowParams.newBuilder()
+                .setProductDetailsParamsList(listOf(
+                    BillingFlowParams.ProductDetailsParams.newBuilder()
+                        .setProductDetails(productList[0])
+                        .build()
+                ))
+                .build()
+
+            currentActivity?.let {
+                billingClient?.launchBillingFlow(it, flowParams)
+            }
+        }
+    }
+
+    override fun onPurchasesUpdated(result: BillingResult, purchases: List<Purchase>?) {
+        when (result.responseCode) {
+            BillingClient.BillingResponseCode.OK -> {
+                purchases?.firstOrNull()?.let { purchase ->
+                    val params = Arguments.createMap().apply {
+                        putString("purchaseToken", purchase.purchaseToken)
+                        putString("orderId", purchase.orderId)
+                        putString("productId", purchase.products.firstOrNull())
+                    }
+                    purchasePromise?.resolve(params)
+                }
+            }
+            BillingClient.BillingResponseCode.USER_CANCELED ->
+                purchasePromise?.resolve(null)
+            else ->
+                purchasePromise?.reject("PURCHASE_ERROR", result.debugMessage)
+        }
+        purchasePromise = null
+    }
+
+    @ReactMethod fun addListener(name: String) {}
+    @ReactMethod fun removeListeners(count: Int) {}
+}
+```
+
+---
+
+### Q311. How do you write a module that accesses device contacts?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Native Modules
+
+**Answer:**
+```kotlin
+// Android — ContactsModule.kt
+class ContactsModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext) {
+
+    override fun getName() = "ContactsModule"
+
+    @ReactMethod
+    fun getContacts(promise: Promise) {
+        val cursor = reactApplicationContext.contentResolver.query(
+            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            arrayOf(
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                ContactsContract.CommonDataKinds.Phone.NUMBER,
+                ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+            ),
+            null, null,
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
+        ) ?: return promise.reject("CURSOR_ERROR", "Failed to query contacts")
+
+        val contacts = Arguments.createArray()
+        val seen = mutableSetOf<String>()
+
+        cursor.use {
+            val nameIdx = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+            val numIdx = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+            val idIdx = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.CONTACT_ID)
+
+            while (it.moveToNext()) {
+                val id = it.getString(idIdx)
+                if (seen.contains(id)) continue
+                seen.add(id)
+
+                val contact = Arguments.createMap().apply {
+                    putString("id", id)
+                    putString("name", it.getString(nameIdx) ?: "")
+                    putString("phone", it.getString(numIdx) ?: "")
+                }
+                contacts.pushMap(contact)
+            }
+        }
+        promise.resolve(contacts)
+    }
+
+    @ReactMethod
+    fun searchContacts(query: String, promise: Promise) {
+        val cursor = reactApplicationContext.contentResolver.query(
+            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            arrayOf(
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                ContactsContract.CommonDataKinds.Phone.NUMBER,
+            ),
+            "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?",
+            arrayOf("%$query%"),
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
+        ) ?: return promise.reject("CURSOR_ERROR", "Search failed")
+
+        val contacts = Arguments.createArray()
+        cursor.use {
+            val nameIdx = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+            val numIdx = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+            while (it.moveToNext()) {
+                val contact = Arguments.createMap().apply {
+                    putString("name", it.getString(nameIdx) ?: "")
+                    putString("phone", it.getString(numIdx) ?: "")
+                }
+                contacts.pushMap(contact)
+            }
+        }
+        promise.resolve(contacts)
+    }
+}
+```
+
+---
+
+### Q312. How do you share data between native modules and React Native state?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Native Modules
+
+**Answer:**
+```js
+// Pattern 1: Events (native → JS push) — most common
+import { NativeEventEmitter, NativeModules } from 'react-native';
+const { LocationModule } = NativeModules;
+const locationEmitter = new NativeEventEmitter(LocationModule);
+
+const useNativeLocation = () => {
+    const [location, setLocation] = useState(null);
+    const [error, setError] = useState(null);
+
+    useEffect(() => {
+        LocationModule.startTracking();
+
+        const locSub = locationEmitter.addListener('onLocationUpdate', setLocation);
+        const errSub = locationEmitter.addListener('onLocationError', (e) => setError(e.message));
+
+        return () => {
+            LocationModule.stopTracking();
+            locSub.remove();
+            errSub.remove();
+        };
+    }, []);
+
+    return { location, error };
+};
+
+// Pattern 2: Promises (JS → native → JS response)
+const useBiometric = () => {
+    const [status, setStatus] = useState('idle');
+
+    const authenticate = useCallback(async () => {
+        setStatus('authenticating');
+        try {
+            const success = await NativeModules.BiometricModule.authenticate('Confirm identity');
+            setStatus(success ? 'authenticated' : 'cancelled');
+            return success;
+        } catch (error) {
+            setStatus('error');
+            throw error;
+        }
+    }, []);
+
+    return { status, authenticate };
+};
+
+// Pattern 3: Zustand store updated from native events
+import { create } from 'zustand';
+
+const useDeviceStore = create((set) => ({
+    batteryLevel: 100,
+    isCharging: false,
+    updateBattery: (level, charging) => set({ batteryLevel: level, isCharging: charging }),
+}));
+
+// Setup once at app root
+const setupNativeListeners = () => {
+    const emitter = new NativeEventEmitter(NativeModules.BatteryModule);
+    emitter.addListener('onBatteryUpdate', ({ level, isCharging }) => {
+        useDeviceStore.getState().updateBattery(level, isCharging);
+    });
+};
+```
+
+---
+
+### Q313. What is the Native Module Lazy Loading in New Architecture?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** New Architecture
+
+**Answer:**
+In the old architecture, **all** native modules are loaded eagerly at app startup regardless of whether they're ever used. TurboModules in the New Architecture are loaded **lazily** — only when first accessed.
+
+```typescript
+// Old Architecture — all modules loaded on startup
+// Even if you never use BiometricModule, it's loaded, initialised, and
+// its getConstants() is called on every app startup
+
+// New Architecture (TurboModules) — lazy loading
+import { TurboModuleRegistry } from 'react-native';
+
+// ❌ Old API — always eagerly loaded
+const { BiometricModule } = NativeModules;
+
+// ✅ New API — loaded only when this line executes (first use)
+const BiometricModule = TurboModuleRegistry.getEnforcing<Spec>('BiometricModule');
+// OR: null if not found
+const BiometricModule = TurboModuleRegistry.get<Spec>('BiometricModule');
+
+// Benefits:
+// - Faster startup (fewer modules to initialise)
+// - Lower memory (unused modules not in memory)
+// - Platform-specific modules only on their platform
+
+// Platform-specific module handling:
+const module = Platform.select({
+    ios: () => TurboModuleRegistry.getEnforcing('IOSOnlyModule'),
+    android: () => TurboModuleRegistry.getEnforcing('AndroidOnlyModule'),
+})?.();
+
+// Conditional loading
+const getModule = () => {
+    if (!isTurboModuleEnabled()) {
+        return NativeModules.LegacyModule; // fallback
+    }
+    return TurboModuleRegistry.get('LegacyModule');
+};
+```
+
+---
+
+### Q314. How do you implement a file picker native module?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Native Modules
+
+**Answer:**
+```kotlin
+// Android — FilePickerModule.kt
+class FilePickerModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext), ActivityEventListener {
+
+    override fun getName() = "FilePicker"
+    private val PICK_FILE_REQUEST = 1234
+    private var filePromise: Promise? = null
+
+    init { reactContext.addActivityEventListener(this) }
+
+    @ReactMethod
+    fun pickFile(mimeTypes: ReadableArray, promise: Promise) {
+        val activity = currentActivity ?: return promise.reject("NO_ACTIVITY", "No activity")
+        filePromise = promise
+
+        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            type = "*/*"
+            if (mimeTypes.size() > 0) {
+                val types = Array(mimeTypes.size()) { mimeTypes.getString(it) ?: "*/*" }
+                putExtra(Intent.EXTRA_MIME_TYPES, types)
+            }
+            addCategory(Intent.CATEGORY_OPENABLE)
+        }
+        activity.startActivityForResult(Intent.createChooser(intent, "Select File"), PICK_FILE_REQUEST)
+    }
+
+    override fun onActivityResult(activity: Activity?, requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode != PICK_FILE_REQUEST) return
+
+        if (resultCode == Activity.RESULT_CANCELED) {
+            filePromise?.resolve(null)
+            filePromise = null
+            return
+        }
+
+        val uri = data?.data ?: run {
+            filePromise?.reject("NO_URI", "No file selected")
+            filePromise = null
+            return
+        }
+
+        try {
+            val contentResolver = reactApplicationContext.contentResolver
+            val cursor = contentResolver.query(uri, null, null, null, null)
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val nameIdx = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val sizeIdx = it.getColumnIndex(OpenableColumns.SIZE)
+                    val result = Arguments.createMap().apply {
+                        putString("uri", uri.toString())
+                        putString("name", it.getString(nameIdx) ?: "file")
+                        putDouble("size", if (sizeIdx >= 0) it.getLong(sizeIdx).toDouble() else 0.0)
+                        putString("type", contentResolver.getType(uri) ?: "application/octet-stream")
+                    }
+                    filePromise?.resolve(result)
+                }
+            }
+        } catch (e: Exception) {
+            filePromise?.reject("FILE_ERROR", e.message, e)
+        } finally {
+            filePromise = null
+        }
+    }
+
+    override fun onNewIntent(intent: Intent?) {}
+}
+```
+
+---
+
+### Q315. How do you implement background geolocation in a native module?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Native Modules — Location
+
+**Answer:**
+```kotlin
+// Android — Background location with ForegroundService
+class LocationModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext) {
+
+    override fun getName() = "LocationModule"
+
+    @ReactMethod
+    fun startBackgroundTracking(config: ReadableMap, promise: Promise) {
+        val interval = config.getInt("interval") * 1000L  // convert to ms
+        val distanceFilter = config.getDouble("distanceFilter").toFloat()
+
+        val serviceIntent = Intent(reactApplicationContext, LocationForegroundService::class.java)
+            .putExtra("interval", interval)
+            .putExtra("distanceFilter", distanceFilter)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            reactApplicationContext.startForegroundService(serviceIntent)
+        } else {
+            reactApplicationContext.startService(serviceIntent)
+        }
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun stopBackgroundTracking(promise: Promise) {
+        reactApplicationContext.stopService(
+            Intent(reactApplicationContext, LocationForegroundService::class.java)
+        )
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun getCurrentLocation(promise: Promise) {
+        val fusedClient = LocationServices.getFusedLocationProviderClient(reactApplicationContext)
+        if (ActivityCompat.checkSelfPermission(
+                reactApplicationContext, Manifest.permission.ACCESS_FINE_LOCATION
+            ) != PackageManager.PERMISSION_GRANTED) {
+            promise.reject("PERMISSION_DENIED", "Location permission not granted")
+            return
+        }
+        fusedClient.lastLocation.addOnSuccessListener { loc ->
+            if (loc != null) {
+                promise.resolve(Arguments.createMap().apply {
+                    putDouble("latitude", loc.latitude)
+                    putDouble("longitude", loc.longitude)
+                    putDouble("accuracy", loc.accuracy.toDouble())
+                    putDouble("altitude", loc.altitude)
+                    putDouble("timestamp", loc.time.toDouble())
+                })
+            } else {
+                promise.reject("NO_LOCATION", "Could not get current location")
+            }
+        }.addOnFailureListener { e ->
+            promise.reject("LOCATION_ERROR", e.message, e)
+        }
+    }
+
+    @ReactMethod fun addListener(name: String) {}
+    @ReactMethod fun removeListeners(count: Int) {}
+}
+```
+
+---
+
+### Q316. How do you implement push notification handling in a native module?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Very High | **Category:** Push Notifications + Native
+
+**Answer:**
+```kotlin
+// Android — FCM notification handling module
+import com.google.firebase.messaging.FirebaseMessaging
+import com.google.firebase.messaging.RemoteMessage
+
+class PushNotificationModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext) {
+
+    override fun getName() = "PushNotificationModule"
+
+    @ReactMethod
+    fun getFCMToken(promise: Promise) {
+        FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+            if (task.isSuccessful) {
+                promise.resolve(task.result)
+            } else {
+                promise.reject("TOKEN_ERROR", task.exception?.message)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun requestPermission(promise: Promise) {
+        // Android 13+ requires POST_NOTIFICATIONS permission
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(
+                    reactApplicationContext, Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED) {
+                promise.resolve("granted")
+            } else {
+                // Request permission (handled via ActivityEventListener)
+                promise.resolve("not_determined")
+            }
+        } else {
+            promise.resolve("granted") // Pre-Android 13 — no runtime permission needed
+        }
+    }
+
+    @ReactMethod
+    fun subscribeToTopic(topic: String, promise: Promise) {
+        FirebaseMessaging.getInstance().subscribeToTopic(topic)
+            .addOnCompleteListener { task ->
+                if (task.isSuccessful) promise.resolve(true)
+                else promise.reject("SUBSCRIBE_ERROR", task.exception?.message)
+            }
+    }
+
+    @ReactMethod
+    fun setBadgeCount(count: Int, promise: Promise) {
+        // Android badge count via ShortcutBadger
+        try {
+            ShortcutBadger.applyCount(reactApplicationContext, count)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("BADGE_ERROR", e.message)
+        }
+    }
+}
+
+// Handle incoming notifications (in your FirebaseMessagingService)
+class MyFirebaseMessagingService : FirebaseMessagingService() {
+    override fun onMessageReceived(message: RemoteMessage) {
+        // Forward to React Native if app is in foreground
+        val intent = Intent("onRemoteNotification")
+        intent.putExtra("data", Gson().toJson(message.data))
+        LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
+    }
+
+    override fun onNewToken(token: String) {
+        // Forward new token to JS
+        val params = Arguments.createMap().apply { putString("token", token) }
+        // emit via ReactInstanceManager
+    }
+}
+```
+
+---
+
+### Q317. How do you implement a native PDF viewer module?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Native View Managers
+
+**Answer:**
+```swift
+// iOS — PDFView as React Native component
+import PDFKit
+
+// ViewManager (exposes native view to React Native)
+@objc(PDFViewManager)
+class PDFViewManager: RCTViewManager {
+
+    override func view() -> UIView! {
+        return PDFReactView()
+    }
+
+    @objc override static func requiresMainQueueSetup() -> Bool { true }
+}
+
+// Native view
+class PDFReactView: UIView {
+    private let pdfView = PDFView()
+    var onPageChange: RCTBubblingEventBlock?
+    var onLoadComplete: RCTBubblingEventBlock?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        pdfView.autoScales = true
+        pdfView.displayMode = .singlePageContinuous
+        addSubview(pdfView)
+        pdfView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            pdfView.topAnchor.constraint(equalTo: topAnchor),
+            pdfView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            pdfView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            pdfView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    @objc var url: String = "" {
+        didSet {
+            guard let pdfURL = URL(string: url),
+                  let document = PDFDocument(url: pdfURL) else { return }
+            pdfView.document = document
+            onLoadComplete?(["pageCount": document.pageCount])
+
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(pageChanged),
+                name: .PDFViewPageChanged,
+                object: pdfView
+            )
+        }
+    }
+
+    @objc func pageChanged() {
+        guard let page = pdfView.currentPage,
+              let doc = pdfView.document else { return }
+        onPageChange?(["page": doc.index(for: page) + 1])
+    }
+}
+```
+
+```objc
+// Bridge header
+@interface RCT_EXTERN_MODULE(PDFViewManager, RCTViewManager)
+RCT_EXPORT_VIEW_PROPERTY(url, NSString)
+RCT_EXPORT_VIEW_PROPERTY(onPageChange, RCTBubblingEventBlock)
+RCT_EXPORT_VIEW_PROPERTY(onLoadComplete, RCTBubblingEventBlock)
+@end
+```
+
+```js
+// JavaScript component
+const PDFView = requireNativeComponent('PDFView');
+
+export const PDFViewer = ({ url, onPageChange, style }) => (
+    <PDFView
+        url={url}
+        onPageChange={(e) => onPageChange?.(e.nativeEvent.page)}
+        style={style}
+    />
+);
+```
+
+---
+
+### Q318. How do you debug Native Modules?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Debugging + Native Modules
+
+**Answer:**
+```kotlin
+// Android debugging strategies:
+
+// 1. Log from native code (visible in Logcat)
+Log.d("MyModule", "getBatteryLevel called")
+Log.e("MyModule", "Error: ${e.message}", e)
+// Filter in Logcat: tag:MyModule
+
+// 2. Flipper — Native Logs plugin
+// Flipper → Logs → filter by your module tag
+// Shows both Java and React Native logs side by side
+
+// 3. Android Studio Debugger
+// Set breakpoints in Kotlin/Java native module code
+// Run app → Attach to process → your app
+// Breakpoints hit when JS calls your @ReactMethod
+
+// 4. Chrome DevTools for JS side
+// Shake device → Debug JS Remotely → Chrome DevTools
+// Network tab shows calls, Console shows errors from JS wrapper
+```
+
+```swift
+// iOS debugging strategies:
+
+// 1. print() from Swift (visible in Xcode console)
+print("[MyModule] authenticate called with reason: \(reason)")
+
+// 2. Xcode Debugger — set breakpoints in Swift module
+// Run from Xcode → breakpoints hit on native method calls
+
+// 3. NSLog (visible in system console and Xcode)
+NSLog("[MyModule] Error: %@", error?.localizedDescription ?? "unknown")
+
+// 4. Instruments — for performance profiling of native code
+// Product → Profile → Time Profiler
+```
+
+```js
+// JS-side debugging:
+// 1. Verify module is registered
+import { NativeModules } from 'react-native';
+console.log('Available modules:', Object.keys(NativeModules));
+// If your module name is missing → registration error
+
+// 2. Check for null module
+const { MyModule } = NativeModules;
+if (!MyModule) {
+    console.error('MyModule not found. Check native registration.');
+}
+
+// 3. React Native Error Overlay
+// Unhandled promise rejections from native modules show as red screen
+// Error includes native error code and message
+
+// 4. Error boundaries for native errors
+try {
+    await MyModule.doSomething();
+} catch (error) {
+    console.log('Error code:', error.code);
+    console.log('Error message:', error.message);
+    // error.nativeStackAndroid or error.nativeStackIOS for stack trace
+}
+```
+
+---
+
+### Q319. What is `processColor` and why do you need it for native modules?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Native Modules
+
+**Answer:**
+React Native's JS color system uses strings (`'#FF0000'`, `'red'`, `'rgba(255,0,0,1)'`). Native code needs colors as integers. `processColor` converts JS color strings to native integers.
+
+```js
+import { processColor } from 'react-native';
+
+// processColor converts any valid React Native color to a native integer
+processColor('#FF0000')         // -65536 (ARGB int on Android)
+processColor('red')             // -65536
+processColor('rgba(255,0,0,1)') // -65536
+processColor('#FF000080')       // semi-transparent red
+
+// Use when passing colors as props to native views
+<NativeColorPickerView
+    selectedColor={processColor('#6200EE')}  // pass as integer to native
+    onColorSelected={handleColorChange}
+/>
+```
+
+```kotlin
+// Android — receive color as Int
+@ReactProp(name = "selectedColor", customType = "Color")
+fun setSelectedColor(view: ColorPickerView, color: Int) {
+    view.setColor(color)
+    // color is already an ARGB int — no conversion needed
+}
+```
+
+```swift
+// iOS — receive color from processed value
+// The @ReactProp equivalent in iOS receives UIColor
+// RCTConvert handles the conversion automatically
+
+// In ViewManager:
+@objc func setSelectedColor(_ view: ColorPickerView, color: UIColor) {
+    view.selectedColor = color
+}
+```
+
+```js
+// In the Objective-C bridge header:
+RCT_EXPORT_VIEW_PROPERTY(selectedColor, UIColor) // RCTConvert handles UIColor conversion
+```
+
+---
+
+### Q320. How do you implement a Native Module for device info?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Native Modules — Practical
+
+**Answer:**
+```kotlin
+// Android — DeviceInfoModule.kt (production-quality)
+class DeviceInfoModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext) {
+
+    override fun getName() = "DeviceInfo"
+
+    override fun getConstants() = mapOf(
+        "deviceId" to Settings.Secure.getString(
+            reactApplicationContext.contentResolver, Settings.Secure.ANDROID_ID
+        ),
+        "brand" to Build.BRAND,
+        "manufacturer" to Build.MANUFACTURER,
+        "model" to Build.MODEL,
+        "osVersion" to Build.VERSION.RELEASE,
+        "sdkVersion" to Build.VERSION.SDK_INT,
+        "isEmulator" to isEmulator(),
+    )
+
+    @ReactMethod
+    fun getStorageInfo(promise: Promise) {
+        val stat = StatFs(Environment.getDataDirectory().path)
+        val total = stat.totalBytes
+        val available = stat.availableBytes
+
+        promise.resolve(Arguments.createMap().apply {
+            putDouble("totalStorage", total.toDouble())
+            putDouble("freeStorage", available.toDouble())
+            putDouble("usedStorage", (total - available).toDouble())
+        })
+    }
+
+    @ReactMethod
+    fun getNetworkInfo(promise: Promise) {
+        val cm = reactApplicationContext
+            .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = cm.activeNetwork
+        val caps = cm.getNetworkCapabilities(network)
+
+        val type = when {
+            caps == null -> "NONE"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "CELLULAR"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
+            else -> "UNKNOWN"
+        }
+        promise.resolve(type)
+    }
+
+    private fun isEmulator(): Boolean = (
+        Build.FINGERPRINT.startsWith("generic") ||
+        Build.MODEL.contains("Emulator") ||
+        Build.MODEL.contains("Android SDK")
+    )
+}
+```
+
+---
+
+### Q321. How do you implement a native module for Razorpay payment gateway?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Very High | **Category:** Native Modules — Payments (India)
+
+**Answer:**
+```kotlin
+// Android — RazorpayModule.kt
+// Uses Razorpay Android SDK: implementation 'com.razorpay:checkout:1.6.26'
+
+class RazorpayModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext),
+      ActivityEventListener,
+      PaymentResultWithDataListener {
+
+    override fun getName() = "RazorpayModule"
+    private var paymentPromise: Promise? = null
+
+    init { reactContext.addActivityEventListener(this) }
+
+    @ReactMethod
+    fun startPayment(options: ReadableMap, promise: Promise) {
+        val activity = currentActivity
+            ?: return promise.reject("NO_ACTIVITY", "No activity")
+        paymentPromise = promise
+
+        activity.runOnUiThread {
+            val checkout = Checkout()
+            checkout.setKeyID(options.getString("key") ?: "")
+            checkout.setImage(R.mipmap.ic_launcher)
+
+            try {
+                val jsonOptions = JSONObject().apply {
+                    put("name", options.getString("name") ?: "")
+                    put("description", options.getString("description") ?: "")
+                    put("currency", options.getString("currency") ?: "INR")
+                    put("amount", options.getInt("amount"))       // in paise
+                    put("order_id", options.getString("order_id") ?: "")
+                    put("prefill", JSONObject().apply {
+                        put("name", options.getString("prefill_name") ?: "")
+                        put("email", options.getString("prefill_email") ?: "")
+                        put("contact", options.getString("prefill_contact") ?: "")
+                    })
+                    put("theme", JSONObject().apply {
+                        put("color", options.getString("theme_color") ?: "#6200EE")
+                    })
+                }
+                checkout.open(activity as AppCompatActivity, jsonOptions)
+            } catch (e: Exception) {
+                promise.reject("RAZORPAY_ERROR", e.message, e)
+                paymentPromise = null
+            }
+        }
+    }
+
+    // Called on payment success
+    override fun onPaymentSuccess(razorpayPaymentId: String?, paymentData: PaymentData?) {
+        val result = Arguments.createMap().apply {
+            putString("razorpay_payment_id", razorpayPaymentId)
+            putString("razorpay_order_id", paymentData?.orderId)
+            putString("razorpay_signature", paymentData?.signature)
+        }
+        paymentPromise?.resolve(result)
+        paymentPromise = null
+    }
+
+    // Called on payment failure
+    override fun onPaymentError(code: Int, description: String?, paymentData: PaymentData?) {
+        paymentPromise?.reject(code.toString(), description)
+        paymentPromise = null
+    }
+
+    override fun onActivityResult(activity: Activity?, requestCode: Int, resultCode: Int, data: Intent?) {}
+    override fun onNewIntent(intent: Intent?) {}
+}
+```
+
+```js
+// JavaScript wrapper
+import { NativeModules } from 'react-native';
+const { RazorpayModule } = NativeModules;
+
+export const Razorpay = {
+    openPaymentCheckout: async (options) => {
+        try {
+            const result = await RazorpayModule.startPayment(options);
+            return result; // { razorpay_payment_id, razorpay_order_id, razorpay_signature }
+        } catch (error) {
+            throw {
+                code: parseInt(error.code),
+                description: error.message,
+            };
+        }
+    }
+};
+
+// Usage
+const handlePayment = async () => {
+    try {
+        const result = await Razorpay.openPaymentCheckout({
+            key: 'rzp_test_xxxxxxxx',
+            name: 'Your Company',
+            description: 'ERP Subscription',
+            currency: 'INR',
+            amount: 99900, // ₹999.00 in paise
+            order_id: 'order_xxxxxxxx',
+            prefill_name: 'Devesh Kumar',
+            prefill_email: 'devesh@example.com',
+            prefill_contact: '9876543210',
+            theme_color: '#6200EE',
+        });
+        await verifyPayment(result);
+    } catch (error) {
+        if (error.code === 0) {
+            Alert.alert('Payment cancelled');
+        } else {
+            Alert.alert('Payment failed', error.description);
+        }
+    }
+};
+```
+
+---
+
+### Q322. How do you implement deep linking handling in a native module?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Deep Linking + Native
+
+**Answer:**
+```kotlin
+// Android — handle deep links in MainActivity
+// android/app/src/main/java/com/yourapp/MainActivity.kt
+
+class MainActivity : ReactActivity(), ActivityEventListener {
+
+    override fun getMainComponentName() = "YourApp"
+
+    // Handle deep link when app is launched from a link (cold start)
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Deep link data available in intent
+        val uri = intent?.data
+        // React Navigation reads this via Linking.getInitialURL()
+    }
+
+    // Handle deep link when app is already open (warm start)
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // ReactApplication processes this via Linking API
+    }
+}
+```
+
+```kotlin
+// Custom deep link module with validation
+class DeepLinkModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext), ActivityEventListener {
+
+    override fun getName() = "DeepLinkModule"
+
+    init { reactContext.addActivityEventListener(this) }
+
+    @ReactMethod
+    fun getInitialURL(promise: Promise) {
+        val activity = currentActivity
+        val uri = activity?.intent?.data
+        promise.resolve(uri?.toString())
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        val uri = intent?.data?.toString() ?: return
+        val params = Arguments.createMap().apply { putString("url", uri) }
+        sendEvent("onDeepLink", params)
+    }
+
+    private fun sendEvent(name: String, params: WritableMap) {
+        reactApplicationContext
+            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit(name, params)
+    }
+
+    override fun onActivityResult(a: Activity?, r: Int, c: Int, d: Intent?) {}
+    @ReactMethod fun addListener(name: String) {}
+    @ReactMethod fun removeListeners(count: Int) {}
+}
+```
+
+```js
+// React Navigation + Linking configuration
+const config = {
+    screens: {
+        Home: 'home',
+        Profile: 'profile/:userId',
+        Product: { path: 'product/:productId', parse: { productId: Number } },
+        Payment: 'payment/:orderId',
+    },
+};
+
+const linking = {
+    prefixes: ['yourapp://', 'https://yourapp.com'],
+    config,
+    // Handle custom validation
+    getStateFromPath: (path, options) => {
+        // Optional: validate and transform the path
+        if (path.startsWith('/admin')) return null; // reject admin paths
+        return getStateFromPath(path, options);
+    },
+};
+
+export default function App() {
+    return (
+        <NavigationContainer linking={linking}>
+            <AppStack />
+        </NavigationContainer>
+    );
+}
+```
+
+---
+
+### Q323. How do you implement a custom splash screen with animations via native module?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Native Modules — UI
+
+**Answer:**
+```kotlin
+// Android — Animated Splash Module
+class SplashModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext) {
+
+    override fun getName() = "SplashModule"
+
+    @ReactMethod
+    fun hide(duration: Int, promise: Promise) {
+        val activity = currentActivity ?: return promise.resolve(false)
+
+        activity.runOnUiThread {
+            val splashView = activity.findViewById<View>(R.id.splash_container)
+                ?: return@runOnUiThread
+
+            // Fade out animation
+            val anim = android.view.animation.AnimationUtils.loadAnimation(
+                activity, android.R.anim.fade_out
+            )
+            anim.duration = duration.toLong()
+            anim.setAnimationListener(object : android.view.animation.Animation.AnimationListener {
+                override fun onAnimationStart(a: android.view.animation.Animation?) {}
+                override fun onAnimationRepeat(a: android.view.animation.Animation?) {}
+                override fun onAnimationEnd(a: android.view.animation.Animation?) {
+                    splashView.visibility = View.GONE
+                    promise.resolve(true)
+                }
+            })
+            splashView.startAnimation(anim)
+        }
+    }
+
+    @ReactMethod
+    fun show(promise: Promise) {
+        val activity = currentActivity ?: return promise.reject("NO_ACTIVITY", "")
+        activity.runOnUiThread {
+            val splashView = activity.findViewById<View>(R.id.splash_container)
+            splashView?.visibility = View.VISIBLE
+            promise.resolve(true)
+        }
+    }
+}
+```
+
+```js
+// JS — coordinated splash + RN animation
+const useSplashScreen = () => {
+    const { SplashModule } = NativeModules;
+    const contentOpacity = useRef(new Animated.Value(0)).current;
+
+    const hideSplashAndReveal = useCallback(async () => {
+        // Fade out native splash
+        await SplashModule.hide(300);
+
+        // Fade in React Native content
+        Animated.timing(contentOpacity, {
+            toValue: 1,
+            duration: 400,
+            useNativeDriver: true,
+        }).start();
+    }, []);
+
+    return { contentOpacity, hideSplashAndReveal };
+};
+
+// App.tsx
+const App = () => {
+    const { contentOpacity, hideSplashAndReveal } = useSplashScreen();
+
+    useEffect(() => {
+        const init = async () => {
+            await loadCriticalData();       // auth, user prefs, theme
+            await hideSplashAndReveal();    // reveal app smoothly
+        };
+        init();
+    }, []);
+
+    return (
+        <Animated.View style={{ flex: 1, opacity: contentOpacity }}>
+            <AppContent />
+        </Animated.View>
+    );
+};
+```
+
+---
+
+### Q324. What is `RCTConvert` and how is it used in iOS native modules?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** iOS Native Modules
+
+**Answer:**
+`RCTConvert` is an Objective-C utility class that converts JavaScript values to native iOS types. React Native uses it internally for all prop conversions.
+
+```objc
+// Auto-used by RCT_EXPORT_VIEW_PROPERTY
+// Explicit use in complex prop handling:
+
+#import <React/RCTConvert.h>
+
+// In your ViewManager:
+RCT_CUSTOM_VIEW_PROPERTY(style, NSDictionary, MyCustomView) {
+    if (json) {
+        CGFloat cornerRadius = [RCTConvert CGFloat:json[@"borderRadius"]];
+        UIColor *bgColor = [RCTConvert UIColor:json[@"backgroundColor"]];
+        view.layer.cornerRadius = cornerRadius;
+        view.backgroundColor = bgColor;
+    }
+}
+```
+
+```swift
+// Swift equivalent — access through Objective-C interop
+@objc func configureView(_ view: MyView, json: NSDictionary) {
+    if let colorValue = json["backgroundColor"] {
+        // RCTConvert converts JS color int to UIColor
+        let color = RCTConvert.uiColor(colorValue)
+        view.backgroundColor = color
+    }
+}
+
+// Common RCTConvert methods:
+// RCTConvert.uiColor(_ json) → UIColor
+// RCTConvert.cgFloat(_ json) → CGFloat
+// RCTConvert.nsString(_ json) → NSString
+// RCTConvert.nsDictionary(_ json) → NSDictionary
+// RCTConvert.nsArray(_ json) → NSArray
+// RCTConvert.bool(_ json) → Bool
+// RCTConvert.nsInteger(_ json) → NSInteger
+// RCTConvert.cgRect(_ json) → CGRect
+// RCTConvert.uiFont(_ json) → UIFont
+```
+
+---
+
+### Q325. How do you implement a native status bar module?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Native Modules — UI
+
+**Answer:**
+```kotlin
+// Android — StatusBarModule.kt
+class StatusBarModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext) {
+
+    override fun getName() = "StatusBarModule"
+
+    @ReactMethod
+    fun setBarStyle(style: String, animated: Boolean) {
+        currentActivity?.runOnUiThread {
+            val window = currentActivity?.window ?: return@runOnUiThread
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val controller = window.insetsController ?: return@runOnUiThread
+                when (style) {
+                    "dark-content" ->
+                        controller.setSystemBarsAppearance(
+                            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS,
+                            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                        )
+                    "light-content" ->
+                        controller.setSystemBarsAppearance(
+                            0, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                        )
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                var flags = window.decorView.systemUiVisibility
+                flags = when (style) {
+                    "dark-content" -> flags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                    else -> flags and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
+                }
+                window.decorView.systemUiVisibility = flags
+            }
+        }
+    }
+
+    @ReactMethod
+    fun setBackgroundColor(color: Int, animated: Boolean) {
+        currentActivity?.runOnUiThread {
+            currentActivity?.window?.statusBarColor = color
+        }
+    }
+
+    @ReactMethod
+    fun setHidden(hidden: Boolean, animated: Boolean) {
+        currentActivity?.runOnUiThread {
+            if (hidden) {
+                currentActivity?.window?.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            } else {
+                currentActivity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            }
+        }
+    }
+}
+```
+
+---
+
+### Q326. How do you implement a native network interceptor module?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Networking + Native Modules
+
+**Answer:**
+```kotlin
+// Android — OkHttp Interceptor Module
+// Intercepts all HTTP traffic from React Native's networking layer
+
+class NetworkInterceptorModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext) {
+
+    override fun getName() = "NetworkInterceptor"
+
+    // OkHttp interceptor — logs all requests/responses
+    class LoggingInterceptor(private val emitter: DeviceEventManagerModule.RCTDeviceEventEmitter)
+        : Interceptor {
+
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val request = chain.request()
+            val requestId = System.nanoTime().toString()
+            val startTime = System.currentTimeMillis()
+
+            // Emit request start event
+            emitter.emit("onNetworkRequest", Arguments.createMap().apply {
+                putString("requestId", requestId)
+                putString("url", request.url.toString())
+                putString("method", request.method)
+                putDouble("timestamp", startTime.toDouble())
+            })
+
+            val response = try {
+                chain.proceed(request)
+            } catch (e: Exception) {
+                emitter.emit("onNetworkError", Arguments.createMap().apply {
+                    putString("requestId", requestId)
+                    putString("error", e.message)
+                })
+                throw e
+            }
+
+            val duration = System.currentTimeMillis() - startTime
+
+            // Emit response event
+            emitter.emit("onNetworkResponse", Arguments.createMap().apply {
+                putString("requestId", requestId)
+                putInt("statusCode", response.code)
+                putDouble("duration", duration.toDouble())
+                putBoolean("success", response.isSuccessful)
+            })
+
+            return response
+        }
+    }
+
+    // Install interceptor into RN's OkHttp client
+    @ReactMethod
+    fun install(promise: Promise) {
+        try {
+            val emitter = reactApplicationContext
+                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+
+            OkHttpClientProvider.addOkHttpClientFactory { builder ->
+                builder.addInterceptor(LoggingInterceptor(emitter))
+            }
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("INSTALL_ERROR", e.message, e)
+        }
+    }
+
+    @ReactMethod fun addListener(name: String) {}
+    @ReactMethod fun removeListeners(count: Int) {}
+}
+```
+
+---
+
+### Q327. What are `WritableMap` and `ReadableMap` in Android native modules?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Android Native Modules
+
+**Answer:**
+```kotlin
+// ReadableMap — JS object received by native (read-only from native's perspective)
+// WritableMap — JS object created by native to send back to JS
+
+@ReactMethod
+fun processConfig(config: ReadableMap, promise: Promise) {
+    // Reading from ReadableMap (received from JS)
+    val apiKey = config.getString("apiKey") ?: ""
+    val timeout = if (config.hasKey("timeout")) config.getInt("timeout") else 30
+    val isDebug = if (config.hasKey("debug")) config.getBoolean("debug") else false
+
+    // Nested object
+    if (config.hasKey("headers")) {
+        val headers = config.getMap("headers")
+        val authHeader = headers?.getString("Authorization") ?: ""
+    }
+
+    // Array
+    if (config.hasKey("allowedDomains")) {
+        val domains = config.getArray("allowedDomains")
+        for (i in 0 until (domains?.size() ?: 0)) {
+            val domain = domains?.getString(i)
+        }
+    }
+
+    // Creating WritableMap to return to JS
+    val result = Arguments.createMap().apply {
+        putString("status", "initialized")
+        putBoolean("success", true)
+        putInt("timeout", timeout)
+
+        // Nested WritableMap
+        val metadata = Arguments.createMap().apply {
+            putString("version", "1.0.0")
+            putDouble("timestamp", System.currentTimeMillis().toDouble())
+        }
+        putMap("metadata", metadata)
+
+        // WritableArray inside WritableMap
+        val features = Arguments.createArray().apply {
+            pushString("biometrics")
+            pushString("offline")
+        }
+        putArray("features", features)
+    }
+    promise.resolve(result)
+}
+
+// ReadableMap type checking:
+// config.getType("key") returns ReadableType: Null, Boolean, Number, String, Map, Array
+when (config.getType("value")) {
+    ReadableType.String -> config.getString("value")
+    ReadableType.Number -> config.getDouble("value")
+    ReadableType.Boolean -> config.getBoolean("value")
+    ReadableType.Map -> config.getMap("value")
+    ReadableType.Array -> config.getArray("value")
+    ReadableType.Null -> null
+    else -> null
+}
+```
+
+---
+
+### Q328. How do you implement a native module that accesses the camera roll / photo library?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Native Modules — Photos
+
+**Answer:**
+```swift
+// iOS — PhotoLibraryModule.swift
+import Photos
+
+@objc(PhotoLibraryModule)
+class PhotoLibraryModule: NSObject {
+
+    @objc static func requiresMainQueueSetup() -> Bool { false }
+
+    @objc func requestPermission(_ resolve: @escaping RCTPromiseResolveBlock,
+                                  rejecter reject: @escaping RCTPromiseRejectBlock) {
+        PHPhotoLibrary.requestAuthorization { status in
+            switch status {
+            case .authorized, .limited: resolve("authorized")
+            case .denied: resolve("denied")
+            case .restricted: resolve("restricted")
+            case .notDetermined: resolve("notDetermined")
+            @unknown default: resolve("unknown")
+            }
+        }
+    }
+
+    @objc func getPhotos(_ options: NSDictionary,
+                          resolver resolve: @escaping RCTPromiseResolveBlock,
+                          rejecter reject: @escaping RCTPromiseRejectBlock) {
+        let limit = options["limit"] as? Int ?? 20
+        let offset = options["offset"] as? Int ?? 0
+
+        let fetchOptions = PHFetchOptions()
+        fetchOptions.fetchLimit = limit + offset
+        fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+
+        let assets = PHAsset.fetchAssets(with: .image, options: fetchOptions)
+        var photos: [[String: Any]] = []
+        let manager = PHImageManager.default()
+        let requestOptions = PHImageRequestOptions()
+        requestOptions.isSynchronous = true
+        requestOptions.deliveryMode = .opportunistic
+
+        let start = min(offset, assets.count)
+        let end = min(offset + limit, assets.count)
+
+        for i in start..<end {
+            let asset = assets.object(at: i)
+            manager.requestImage(
+                for: asset,
+                targetSize: CGSize(width: 200, height: 200),
+                contentMode: .aspectFill,
+                options: requestOptions
+            ) { image, _ in
+                guard let image = image,
+                      let data = image.jpegData(compressionQuality: 0.7) else { return }
+                photos.append([
+                    "id": asset.localIdentifier,
+                    "width": asset.pixelWidth,
+                    "height": asset.pixelHeight,
+                    "thumbnail": "data:image/jpeg;base64,\(data.base64EncodedString())",
+                    "creationDate": asset.creationDate?.timeIntervalSince1970 ?? 0,
+                ])
+            }
+        }
+        resolve(["photos": photos, "hasMore": end < assets.count])
+    }
+}
+```
+
+---
+
+### Q329. How do you create a cross-platform JS wrapper for a native module?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Native Modules — Architecture
+
+**Answer:**
+```js
+// src/modules/Keychain.ts
+// Clean cross-platform wrapper with types, fallbacks, and error handling
+
+import { NativeModules, Platform } from 'react-native';
+
+const { KeychainModule } = NativeModules;
+
+export interface KeychainResult {
+    service: string;
+    username: string;
+    password: string;
+}
+
+export const Keychain = {
+    // setGenericPassword — stores credentials with service name
+    async setGenericPassword(
+        username: string,
+        password: string,
+        service: string = 'default'
+    ): Promise<boolean> {
+        if (!KeychainModule) {
+            console.warn('Keychain: native module not available, using fallback');
+            // Fallback for simulators or test environments
+            if (__DEV__) {
+                await AsyncStorage.setItem(`keychain_${service}`, JSON.stringify({ username, password }));
+                return true;
+            }
+            throw new Error('Keychain not available');
+        }
+        return KeychainModule.setItem(`${service}:${username}`, password);
+    },
+
+    async getGenericPassword(service: string = 'default'): Promise<KeychainResult | null> {
+        if (!KeychainModule) {
+            if (__DEV__) {
+                const stored = await AsyncStorage.getItem(`keychain_${service}`);
+                if (!stored) return null;
+                const { username, password } = JSON.parse(stored);
+                return { service, username, password };
+            }
+            throw new Error('Keychain not available');
+        }
+
+        // Different key format per platform
+        const key = Platform.OS === 'ios'
+            ? `${service}:credentials`
+            : `${service}:username`;
+
+        const value = await KeychainModule.getItem(key);
+        if (!value) return null;
+
+        const [username, password] = value.split(':');
+        return { service, username, password };
+    },
+
+    async resetGenericPassword(service: string = 'default'): Promise<boolean> {
+        if (!KeychainModule) return false;
+        return KeychainModule.removeItem(`${service}:credentials`);
+    },
+
+    // Check if keychain is available
+    isAvailable(): boolean {
+        return !!KeychainModule;
+    },
+};
+```
+
+---
+
+### Q330. What happens when a Native Module is not available on a platform?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Native Modules
+
+**Answer:**
+```js
+import { NativeModules, Platform } from 'react-native';
+
+// NativeModules.SomeModule will be undefined if not registered on the current platform
+const { IOSOnlyModule } = NativeModules;
+
+// ❌ Will crash on Android
+const handlePress = async () => {
+    const result = await IOSOnlyModule.doSomething(); // TypeError: null is not an object
+};
+
+// ✅ Guard with null check
+const handlePress = async () => {
+    if (!IOSOnlyModule) {
+        console.warn('IOSOnlyModule not available on this platform');
+        return;
+    }
+    const result = await IOSOnlyModule.doSomething();
+};
+
+// ✅ Platform.select for platform-specific modules
+const getModule = () => Platform.select({
+    ios: () => NativeModules.IOSOnlyModule,
+    android: () => NativeModules.AndroidOnlyModule,
+    default: () => null,
+})?.();
+
+// ✅ Graceful degradation with feature flags
+const BiometricAuth = {
+    isAvailable: async () => {
+        if (!NativeModules.BiometricModule) return false;
+        try {
+            const type = await NativeModules.BiometricModule.canAuthenticate();
+            return type !== 'NONE' && type !== 'NO_HARDWARE';
+        } catch {
+            return false;
+        }
+    },
+    authenticate: async (reason: string) => {
+        if (!NativeModules.BiometricModule) {
+            // Fallback: show PIN/password prompt instead
+            return showPasswordPrompt(reason);
+        }
+        return NativeModules.BiometricModule.authenticate(reason);
+    }
+};
+
+// ✅ TurboModuleRegistry.get (returns null instead of throwing)
+import { TurboModuleRegistry } from 'react-native';
+const module = TurboModuleRegistry.get('OptionalModule');
+// module is null if not registered — no crash
+```
+
+---
+
+### Q331. How do you expose constants from a native module?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Native Modules
+
+**Answer:**
+Constants are synchronously available in JS immediately — no async call needed.
+
+```kotlin
+// Android — getConstants()
+class AppConfigModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext) {
+
+    override fun getName() = "AppConfig"
+
+    // getConstants() is called once at startup — keep it fast
+    override fun getConstants(): Map<String, Any> {
+        val packageInfo = reactApplicationContext.packageManager
+            .getPackageInfo(reactApplicationContext.packageName, 0)
+
+        return mapOf(
+            "APP_VERSION" to packageInfo.versionName,
+            "BUILD_NUMBER" to if (Build.VERSION.SDK_INT >= 28)
+                packageInfo.longVersionCode.toString()
+                else packageInfo.versionCode.toString(),
+            "BUNDLE_ID" to reactApplicationContext.packageName,
+            "IS_EMULATOR" to isEmulator(),
+            "DEVICE_ID" to Settings.Secure.getString(
+                reactApplicationContext.contentResolver,
+                Settings.Secure.ANDROID_ID
+            ),
+            "ENVIRONMENT" to BuildConfig.BUILD_TYPE,  // "debug", "release"
+        )
+    }
+}
+```
+
+```swift
+// iOS — constantsToExport()
+@objc(AppConfigModule)
+class AppConfigModule: NSObject, RCTBridgeModule {
+
+    static func moduleName() -> String! { "AppConfig" }
+
+    func constantsToExport() -> [AnyHashable: Any]! {
+        let bundle = Bundle.main
+        return [
+            "APP_VERSION": bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") ?? "",
+            "BUILD_NUMBER": bundle.object(forInfoDictionaryKey: "CFBundleVersion") ?? "",
+            "BUNDLE_ID": bundle.bundleIdentifier ?? "",
+            "IS_SIMULATOR": TARGET_OS_SIMULATOR != 0,
+            "DEVICE_ID": UIDevice.current.identifierForVendor?.uuidString ?? "",
+            "ENVIRONMENT": Bundle.main.object(forInfoDictionaryKey: "ENV") as? String ?? "production",
+        ]
+    }
+}
+```
+
+```js
+// JavaScript — access synchronously
+import { NativeModules } from 'react-native';
+const { APP_VERSION, BUILD_NUMBER, IS_EMULATOR } = NativeModules.AppConfig;
+
+console.log(`v${APP_VERSION} (${BUILD_NUMBER})`);
+if (IS_EMULATOR) console.log('Running on emulator');
+
+// Or access via the module directly
+const config = NativeModules.AppConfig;
+// No await needed — constants are available synchronously
+```
+
+---
+
+### Q332. How do you implement a native module for crash reporting?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Native Modules — Analytics
+
+**Answer:**
+```kotlin
+// Android — Custom crash reporter + Sentry wrapper
+class CrashReportingModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext) {
+
+    override fun getName() = "CrashReporting"
+
+    @ReactMethod
+    fun initialize(dsn: String, config: ReadableMap, promise: Promise) {
+        try {
+            SentryAndroid.init(reactApplicationContext) { options ->
+                options.dsn = dsn
+                options.tracesSampleRate = if (config.hasKey("tracesSampleRate"))
+                    config.getDouble("tracesSampleRate") else 0.1
+                options.environment = if (config.hasKey("environment"))
+                    config.getString("environment") else "production"
+                options.release = if (config.hasKey("release"))
+                    config.getString("release") else BuildConfig.VERSION_NAME
+            }
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("INIT_ERROR", e.message, e)
+        }
+    }
+
+    @ReactMethod
+    fun captureException(message: String, extras: ReadableMap) {
+        Sentry.captureException(Exception(message)) { scope ->
+            extras.entryIterator.forEach { entry ->
+                scope.setExtra(entry.key, entry.value?.toString() ?: "null")
+            }
+        }
+    }
+
+    @ReactMethod
+    fun captureMessage(message: String, level: String) {
+        val sentryLevel = when (level.lowercase()) {
+            "fatal" -> SentryLevel.FATAL
+            "error" -> SentryLevel.ERROR
+            "warning" -> SentryLevel.WARNING
+            "info" -> SentryLevel.INFO
+            else -> SentryLevel.DEBUG
+        }
+        Sentry.captureMessage(message, sentryLevel)
+    }
+
+    @ReactMethod
+    fun setUser(userId: String, email: String, username: String) {
+        Sentry.setUser(User().apply {
+            this.id = userId
+            this.email = email
+            this.username = username
+        })
+    }
+
+    @ReactMethod
+    fun addBreadcrumb(message: String, category: String, level: String) {
+        Sentry.addBreadcrumb(Breadcrumb().apply {
+            this.message = message
+            this.category = category
+            this.level = SentryLevel.valueOf(level.uppercase())
+        })
+    }
+
+    @ReactMethod
+    fun clearUser() { Sentry.setUser(null) }
+}
+```
+
+---
+
+### Q333. How do you handle native module version incompatibilities?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Native Modules
+
+**Answer:**
+```js
+// Problem: native module API changes between library versions
+// Your JS code calls .oldMethodName() but newer native has .newMethodName()
+
+// Strategy 1: Version checking
+import { NativeModules } from 'react-native';
+const { MyModule } = NativeModules;
+
+const getVersion = () => MyModule?.version ?? 0;
+
+const compatibleAPI = {
+    doSomething: () => {
+        if (getVersion() >= 2) {
+            return MyModule.doSomethingV2(); // new API
+        }
+        return MyModule.doSomething();       // old API
+    }
+};
+
+// Strategy 2: Try/catch fallback
+const robustCall = async () => {
+    try {
+        return await MyModule.newMethod();
+    } catch (error) {
+        if (error.code === 'NOT_FOUND' || error.message?.includes('not a function')) {
+            return MyModule.oldMethod(); // fallback to old API
+        }
+        throw error;
+    }
+};
+
+// Strategy 3: Constants version flag
+// Native module exposes: getConstants() → { MODULE_VERSION: 2 }
+const { MODULE_VERSION } = NativeModules.MyModule;
+
+// Strategy 4: checkForUpdate (semver)
+// If library version >= '2.0.0', use new API
+import { version as rnVersion } from 'react-native/package.json';
+import semver from 'semver';
+
+if (semver.gte(myLibVersion, '2.0.0')) {
+    // use new API
+}
+```
+
+---
+
+### Q334. How do you implement a native speech recognition module?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Native Modules
+
+**Answer:**
+```swift
+// iOS — SpeechRecognitionModule.swift
+import Speech
+
+@objc(SpeechModule)
+class SpeechModule: RCTEventEmitter {
+
+    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTask: SFSpeechRecognitionTask?
+    private let audioEngine = AVAudioEngine()
+    private var recognizer: SFSpeechRecognizer?
+
+    override func supportedEvents() -> [String]! {
+        ["onSpeechStart", "onSpeechPartialResult", "onSpeechFinalResult", "onSpeechError", "onSpeechEnd"]
+    }
+
+    override static func requiresMainQueueSetup() -> Bool { false }
+
+    @objc func requestPermission(_ resolve: @escaping RCTPromiseResolveBlock,
+                                  rejecter reject: @escaping RCTPromiseRejectBlock) {
+        SFSpeechRecognizer.requestAuthorization { status in
+            AVAudioSession.sharedInstance().requestRecordPermission { micGranted in
+                let speechGranted = status == .authorized
+                resolve(speechGranted && micGranted ? "authorized" : "denied")
+            }
+        }
+    }
+
+    @objc func startRecognition(_ locale: String,
+                                 resolver resolve: @escaping RCTPromiseResolveBlock,
+                                 rejecter reject: @escaping RCTPromiseRejectBlock) {
+        recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale))
+        guard let recognizer = recognizer, recognizer.isAvailable else {
+            reject("NOT_AVAILABLE", "Speech recognition not available for locale: \(locale)", nil)
+            return
+        }
+
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
+            try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+
+            recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
+            recognitionRequest?.shouldReportPartialResults = true
+
+            let inputNode = audioEngine.inputNode
+            recognitionTask = recognizer.recognitionTask(with: recognitionRequest!) { [weak self] result, error in
+                if let result = result {
+                    let text = result.bestTranscription.formattedString
+                    if result.isFinal {
+                        self?.sendEvent(withName: "onSpeechFinalResult", body: ["value": text])
+                    } else {
+                        self?.sendEvent(withName: "onSpeechPartialResult", body: ["value": text])
+                    }
+                }
+                if let error = error {
+                    self?.sendEvent(withName: "onSpeechError", body: ["error": error.localizedDescription])
+                }
+            }
+
+            let format = inputNode.outputFormat(forBus: 0)
+            inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+                self?.recognitionRequest?.append(buffer)
+            }
+
+            audioEngine.prepare()
+            try audioEngine.start()
+            sendEvent(withName: "onSpeechStart", body: nil)
+            resolve(true)
+        } catch {
+            reject("START_ERROR", error.localizedDescription, error)
+        }
+    }
+
+    @objc func stopRecognition(_ resolve: @escaping RCTPromiseResolveBlock,
+                                rejecter reject: @escaping RCTPromiseRejectBlock) {
+        audioEngine.stop()
+        audioEngine.inputNode.removeTap(onBus: 0)
+        recognitionRequest?.endAudio()
+        recognitionTask?.cancel()
+        sendEvent(withName: "onSpeechEnd", body: nil)
+        resolve(true)
+    }
+}
+```
+
+---
+
+### Q335. What is `ActivityEventListener` in Android native modules?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Android Native Modules
+
+**Answer:**
+`ActivityEventListener` is an interface that allows a native module to receive callbacks from the Android Activity lifecycle — specifically `onActivityResult` and `onNewIntent`.
+
+```kotlin
+class DocumentPickerModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext), ActivityEventListener {
+
+    override fun getName() = "DocumentPicker"
+    private var pickerPromise: Promise? = null
+    private val PICK_DOC = 5678
+
+    // MUST register listener in init block
+    init { reactContext.addActivityEventListener(this) }
+
+    @ReactMethod
+    fun pickDocument(promise: Promise) {
+        val activity = currentActivity ?: return promise.reject("NO_ACTIVITY", "")
+        pickerPromise = promise
+
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/pdf"
+        }
+        activity.startActivityForResult(intent, PICK_DOC)
+    }
+
+    // Called after startActivityForResult completes (user picks or cancels)
+    override fun onActivityResult(activity: Activity?, requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode != PICK_DOC) return
+
+        when (resultCode) {
+            Activity.RESULT_OK -> {
+                val uri = data?.data
+                if (uri != null) {
+                    pickerPromise?.resolve(Arguments.createMap().apply {
+                        putString("uri", uri.toString())
+                    })
+                } else {
+                    pickerPromise?.reject("NO_URI", "No document selected")
+                }
+            }
+            Activity.RESULT_CANCELED -> pickerPromise?.resolve(null)
+        }
+        pickerPromise = null
+    }
+
+    // Called when a new Intent is received (deep link, notification tap)
+    override fun onNewIntent(intent: Intent?) {
+        val url = intent?.data?.toString() ?: return
+        sendEvent("onDeepLink", Arguments.createMap().apply { putString("url", url) })
+    }
+}
+```
+
+---
+
+### Q336. How do you implement a native module for reading device sensors?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Native Modules — Sensors
+
+**Answer:**
+```kotlin
+// Android — SensorsModule.kt
+class SensorsModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext) {
+
+    override fun getName() = "SensorsModule"
+
+    private val sensorManager = reactApplicationContext
+        .getSystemService(Context.SENSOR_SERVICE) as SensorManager
+    private var sensorListener: SensorEventListener? = null
+
+    @ReactMethod
+    fun startAccelerometer(intervalMs: Int, promise: Promise) {
+        val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+            ?: return promise.reject("NO_SENSOR", "Accelerometer not available")
+
+        val delay = when {
+            intervalMs <= 20  -> SensorManager.SENSOR_DELAY_FASTEST
+            intervalMs <= 60  -> SensorManager.SENSOR_DELAY_GAME
+            intervalMs <= 200 -> SensorManager.SENSOR_DELAY_UI
+            else              -> SensorManager.SENSOR_DELAY_NORMAL
+        }
+
+        sensorListener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent) {
+                val params = Arguments.createMap().apply {
+                    putDouble("x", event.values[0].toDouble())
+                    putDouble("y", event.values[1].toDouble())
+                    putDouble("z", event.values[2].toDouble())
+                    putDouble("timestamp", System.currentTimeMillis().toDouble())
+                }
+                sendEvent("onAccelerometer", params)
+            }
+            override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
+        }
+
+        sensorManager.registerListener(sensorListener, sensor, delay)
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun startGyroscope(intervalMs: Int, promise: Promise) {
+        val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+            ?: return promise.reject("NO_SENSOR", "Gyroscope not available")
+        // Similar implementation...
+    }
+
+    @ReactMethod
+    fun stopSensor(type: String, promise: Promise) {
+        sensorListener?.let { sensorManager.unregisterListener(it) }
+        sensorListener = null
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun isSensorAvailable(type: String, promise: Promise) {
+        val sensorType = when (type) {
+            "accelerometer" -> Sensor.TYPE_ACCELEROMETER
+            "gyroscope" -> Sensor.TYPE_GYROSCOPE
+            "magnetometer" -> Sensor.TYPE_MAGNETIC_FIELD
+            "barometer" -> Sensor.TYPE_PRESSURE
+            else -> return promise.reject("UNKNOWN_SENSOR", "Unknown type: $type")
+        }
+        promise.resolve(sensorManager.getDefaultSensor(sensorType) != null)
+    }
+
+    private fun sendEvent(name: String, params: WritableMap) {
+        reactApplicationContext
+            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit(name, params)
+    }
+
+    @ReactMethod fun addListener(name: String) {}
+    @ReactMethod fun removeListeners(count: Int) {}
+}
+```
+
+---
+
+### Q337. How do you pass large data efficiently between JS and Native?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Performance + Native Modules
+
+**Answer:**
+Passing large data across the bridge (old arch) or JSI (new arch) has overhead. Strategy depends on data type and size.
+
+```kotlin
+// Strategy 1: File path instead of base64 for binary data
+// ❌ Passing 5MB image as base64 string
+@ReactMethod
+fun captureScreenBad(promise: Promise) {
+    val bitmap = captureScreen()
+    val bytes = bitmapToBytes(bitmap)
+    promise.resolve(Base64.encodeToString(bytes, Base64.DEFAULT)) // 7MB base64 string!
+}
+
+// ✅ Write to file, return path
+@ReactMethod
+fun captureScreenGood(promise: Promise) {
+    val bitmap = captureScreen()
+    val file = File(reactApplicationContext.cacheDir, "screenshot_${System.currentTimeMillis()}.jpg")
+    FileOutputStream(file).use { out ->
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+    }
+    promise.resolve(file.absolutePath) // small string!
+}
+
+// Strategy 2: Streaming large arrays in chunks
+@ReactMethod
+fun getLargeDataset(chunkSize: Int, promise: Promise) {
+    // Return first chunk immediately + token for more
+    val firstChunk = getLargeDataset().take(chunkSize)
+    val token = generatePaginationToken()
+
+    promise.resolve(Arguments.createMap().apply {
+        val arr = Arguments.createArray()
+        firstChunk.forEach { item ->
+            arr.pushMap(Arguments.createMap().apply { putString("id", item.id) })
+        }
+        putArray("data", arr)
+        putString("nextToken", token)
+        putBoolean("hasMore", true)
+    })
+}
+
+// Strategy 3: JSI SharedArrayBuffer (New Architecture)
+// Direct memory sharing between JS and native — zero copy
+// Supported in Hermes + New Architecture
+// Use for: audio buffers, image data, large numeric arrays
+```
+
+---
+
+### Q338. What is `LifecycleEventListener` in Android native modules?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Android Native Modules
+
+**Answer:**
+`LifecycleEventListener` lets a native module react to Android activity lifecycle events — resume, pause, destroy.
+
+```kotlin
+class BackgroundSyncModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext), LifecycleEventListener {
+
+    override fun getName() = "BackgroundSync"
+    private var syncJob: Job? = null
+
+    // Register in init
+    init { reactContext.addLifecycleEventListener(this) }
+
+    // App comes to foreground (Activity.onResume)
+    override fun onHostResume() {
+        // Restart any paused operations
+        startRealTimeSync()
+        // Refresh data that may be stale from background
+        syncPendingData()
+    }
+
+    // App goes to background (Activity.onPause)
+    override fun onHostPause() {
+        // Stop expensive operations
+        stopRealTimeSync()
+        // Flush any pending writes
+        flushPendingWrites()
+    }
+
+    // App is destroyed (Activity.onDestroy — not guaranteed to be called)
+    override fun onHostDestroy() {
+        syncJob?.cancel()
+        cleanupResources()
+    }
+
+    private fun startRealTimeSync() {
+        syncJob = CoroutineScope(Dispatchers.IO).launch {
+            while (isActive) {
+                try { syncData() } catch (e: Exception) { /* log */ }
+                delay(30_000) // sync every 30s while in foreground
+            }
+        }
+    }
+
+    private fun stopRealTimeSync() { syncJob?.cancel() }
+
+    @ReactMethod
+    fun manualSync(promise: Promise) {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                syncData()
+                promise.resolve(true)
+            } catch (e: Exception) {
+                promise.reject("SYNC_ERROR", e.message, e)
+            }
+        }
+    }
+}
+```
+
+---
+
+### Q339. How do you implement a native module that uses Android WorkManager?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Background Tasks + Android
+
+**Answer:**
+```kotlin
+// WorkManager provides guaranteed background execution even after app restart
+
+// 1. Define the work
+class DataSyncWorker(context: Context, params: WorkerParameters)
+    : CoroutineWorker(context, params) {
+
+    override suspend fun doWork(): Result {
+        return try {
+            val employees = fetchEmployeesFromServer()
+            saveToLocalDB(employees)
+
+            // Report progress
+            setProgress(workDataOf("processed" to employees.size))
+
+            Result.success(workDataOf("syncedCount" to employees.size))
+        } catch (e: Exception) {
+            if (runAttemptCount < 3) Result.retry()
+            else Result.failure(workDataOf("error" to e.message))
+        }
+    }
+}
+
+// 2. Native module to schedule/cancel work
+class WorkManagerModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext) {
+
+    override fun getName() = "WorkManager"
+    private val workManager = WorkManager.getInstance(reactApplicationContext)
+
+    @ReactMethod
+    fun scheduleSync(config: ReadableMap, promise: Promise) {
+        val intervalHours = if (config.hasKey("intervalHours"))
+            config.getInt("intervalHours").toLong() else 1L
+
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .setRequiresBatteryNotLow(true)
+            .build()
+
+        val syncRequest = PeriodicWorkRequestBuilder<DataSyncWorker>(
+            intervalHours, TimeUnit.HOURS,
+            15, TimeUnit.MINUTES  // flex interval
+        )
+            .setConstraints(constraints)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.HOURS)
+            .setInputData(workDataOf("syncType" to "full"))
+            .addTag("data_sync")
+            .build()
+
+        workManager.enqueueUniquePeriodicWork(
+            "DataSync",
+            ExistingPeriodicWorkPolicy.UPDATE,
+            syncRequest
+        )
+        promise.resolve(syncRequest.id.toString())
+    }
+
+    @ReactMethod
+    fun cancelSync(promise: Promise) {
+        workManager.cancelUniqueWork("DataSync")
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun getSyncStatus(workId: String, promise: Promise) {
+        workManager.getWorkInfoByIdLiveData(UUID.fromString(workId))
+            .observeForever { info ->
+                promise.resolve(Arguments.createMap().apply {
+                    putString("state", info.state.name)
+                    putString("id", workId)
+                    info.progress.getInt("processed", -1).let { if (it >= 0) putInt("processed", it) }
+                })
+            }
+    }
+}
+```
+
+---
+
+### Q340. How do you write a production-ready native module with full error handling?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Native Modules — Best Practices
+
+**Answer:**
+```kotlin
+// Android — Production-grade native module pattern
+class ProductionModule(reactContext: ReactApplicationContext)
+    : ReactContextBaseJavaModule(reactContext), LifecycleEventListener {
+
+    override fun getName() = MODULE_NAME
+
+    // Error codes as constants — consistent with iOS and JS
+    companion object {
+        const val MODULE_NAME = "ProductionModule"
+        const val E_NOT_INITIALIZED = "E_NOT_INITIALIZED"
+        const val E_PERMISSION_DENIED = "E_PERMISSION_DENIED"
+        const val E_NETWORK_ERROR = "E_NETWORK_ERROR"
+        const val E_INVALID_ARGUMENT = "E_INVALID_ARGUMENT"
+        const val E_OPERATION_FAILED = "E_OPERATION_FAILED"
+    }
+
+    private var isInitialized = false
+    private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    init { reactContext.addLifecycleEventListener(this) }
+
+    override fun getConstants() = mapOf(
+        "MODULE_VERSION" to 2,
+        "E_NOT_INITIALIZED" to E_NOT_INITIALIZED,
+        "E_PERMISSION_DENIED" to E_PERMISSION_DENIED,
+    )
+
+    @ReactMethod
+    fun initialize(config: ReadableMap, promise: Promise) {
+        // Validate required config fields
+        val apiKey = config.getString("apiKey")
+        if (apiKey.isNullOrBlank()) {
+            promise.reject(E_INVALID_ARGUMENT, "apiKey is required")
+            return
+        }
+
+        coroutineScope.launch {
+            try {
+                initSDK(apiKey)
+                isInitialized = true
+                withContext(Dispatchers.Main) { promise.resolve(true) }
+            } catch (e: SecurityException) {
+                withContext(Dispatchers.Main) {
+                    promise.reject(E_PERMISSION_DENIED, e.message, e)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    promise.reject(E_OPERATION_FAILED, "Initialization failed: ${e.message}", e)
+                }
+            }
+        }
+    }
+
+    @ReactMethod
+    fun performOperation(input: String, promise: Promise) {
+        // Guard: check initialization
+        if (!isInitialized) {
+            promise.reject(E_NOT_INITIALIZED, "Module not initialized. Call initialize() first.")
+            return
+        }
+
+        // Guard: validate input
+        if (input.isBlank()) {
+            promise.reject(E_INVALID_ARGUMENT, "Input cannot be empty")
+            return
+        }
+
+        coroutineScope.launch {
+            try {
+                val result = doOperation(input)
+                withContext(Dispatchers.Main) {
+                    promise.resolve(Arguments.createMap().apply {
+                        putString("result", result)
+                        putDouble("timestamp", System.currentTimeMillis().toDouble())
+                    })
+                }
+            } catch (e: IOException) {
+                withContext(Dispatchers.Main) {
+                    promise.reject(E_NETWORK_ERROR, "Network error: ${e.message}", e)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    promise.reject(E_OPERATION_FAILED, e.message, e)
+                }
+            }
+        }
+    }
+
+    override fun onHostResume() {}
+    override fun onHostPause() {}
+    override fun onHostDestroy() {
+        // Cancel all in-flight coroutines on destroy
+        coroutineScope.cancel()
+    }
+
+    @ReactMethod fun addListener(name: String) {}
+    @ReactMethod fun removeListeners(count: Int) {}
+}
+```
+
+```js
+// JavaScript — matching error handling
+import { NativeModules } from 'react-native';
+const { ProductionModule } = NativeModules;
+const { E_NOT_INITIALIZED, E_PERMISSION_DENIED, E_NETWORK_ERROR } = ProductionModule;
+
+export const ProductionAPI = {
+    initialize: async (config) => {
+        try {
+            return await ProductionModule.initialize(config);
+        } catch (error) {
+            if (error.code === E_PERMISSION_DENIED) {
+                throw new Error('Permission denied. Please grant the required permissions.');
+            }
+            throw error;
+        }
+    },
+
+    performOperation: async (input) => {
+        try {
+            return await ProductionModule.performOperation(input);
+        } catch (error) {
+            switch (error.code) {
+                case E_NOT_INITIALIZED:
+                    throw new Error('Please call initialize() first');
+                case E_NETWORK_ERROR:
+                    throw new Error('Network unavailable. Please check your connection.');
+                default:
+                    // Log unexpected errors to Sentry
+                    Sentry.captureException(error);
+                    throw error;
+            }
+        }
+    }
+};
+```
+
+---
+
+## Sections Overview (Q341–Q500)
+
+| Section | Questions | Topics |
+|---------|-----------|--------|
+| Expo vs CLI | Q341–Q370 | Managed vs bare, EAS Build, Expo Go |
+| Testing | Q371–Q420 | Unit, integration, e2e (Detox), mocking |
+| Debugging | Q421–Q450 | Flipper, Hermes debugger, crash reporting |
+| Storage & Permissions | Q451–Q480 | AsyncStorage, Keychain, permission flows |
+| Miscellaneous | Q481–Q500 | Accessibility, internationalisation, misc APIs |
+
+---
+
+> 💡 **Tip for GitHub:** Add a `## Table of Contents` section at the top with anchor links to each question for easy navigation.
+
+---
+
+*Part 01 of 8 — [← Back to Part README](./README.md) · [← Main README](../README.md)*
