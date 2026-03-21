@@ -9779,3 +9779,3328 @@ const Spinner = ({ size = 40, color = '#6200EE', strokeWidth = 3 }) => {
 ---
 
 *Part 01 of 8 — [← Back to Part README](./README.md) · [← Main README](../README.md)*
+
+## Section 7: Performance (Q231–Q290)
+
+---
+
+### Q231. What is the React Native performance bottleneck model?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Very High | **Category:** Architecture + Performance
+
+**Answer:**
+React Native has three threads. Performance problems happen when any of them are starved:
+
+| Thread | Responsibility | Bottleneck symptom |
+|--------|---------------|-------------------|
+| **JS Thread** | Business logic, React rendering, state updates | Slow UI response, dropped interaction frames |
+| **UI Thread** (Main) | Native rendering, layout, touch events | Frozen scrolling, unresponsive gestures |
+| **Shadow Thread** | Yoga layout calculations | Slow layout on complex screens |
+
+```
+JS Thread → Bridge (old) / JSI (new) → UI Thread
+              ↑ bottleneck in old arch
+```
+
+**Old Architecture bottleneck:** Every prop update crosses the bridge (async, serialised JSON). The bridge is a shared communication channel — heavy JS work blocks UI updates.
+
+**New Architecture (JSI):** JS talks directly to C++ via JSI — synchronous, no serialisation, no bridge queue. TurboModules call native code directly. Fabric renders synchronously on the UI thread.
+
+```js
+// Diagnosing which thread is causing drops
+// Dev menu → Show Perf Monitor → watch JS FPS vs UI FPS
+
+// JS FPS drops, UI FPS = 60:
+// → JS thread overloaded (heavy computation, excessive re-renders)
+// Fix: memoisation, move work off JS, InteractionManager
+
+// UI FPS drops regardless:
+// → Layout thrashing, overdraw, animations with useNativeDriver: false
+// Fix: Reanimated, optimise layout, reduce overdraw
+
+// Both drop:
+// → Heavy work on both threads simultaneously
+// Fix: audit both JS logic and native operations
+```
+
+**Follow-up:** What causes UI FPS to drop even with Reanimated? → Shadow thread layout thrashing from rapidly changing `width`/`height` (layout properties can't be animated natively), or excessive overdraw from transparency layers.
+
+---
+
+### Q232. What is `useNativeDriver` and when can you use it?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Performance
+
+**Answer:**
+`useNativeDriver: true` runs the animation entirely on the UI thread — no JS involvement per frame. This means animations continue smoothly even when the JS thread is busy.
+
+```js
+import { Animated } from 'react-native';
+
+// ✅ useNativeDriver: true — supported properties
+// ONLY works with: transform, opacity (and some others on specific platforms)
+Animated.timing(opacity, {
+  toValue: 1,
+  duration: 300,
+  useNativeDriver: true,  // runs on UI thread
+}).start();
+
+Animated.timing(scale, {
+  toValue: 1.5,
+  duration: 200,
+  useNativeDriver: true,  // transform is supported
+}).start();
+
+// ❌ useNativeDriver: false — REQUIRED for layout properties
+Animated.timing(height, {
+  toValue: 200,
+  duration: 300,
+  useNativeDriver: false, // layout properties can't be animated natively
+}).start();
+
+Animated.timing(backgroundColor, {
+  toValue: 1,
+  duration: 300,
+  useNativeDriver: false, // color animations not natively supported
+}).start();
+
+// Properties that support useNativeDriver: true
+// transform (translateX, translateY, scale, rotate, etc.)
+// opacity
+// elevation (Android)
+
+// Properties that DON'T support useNativeDriver: true
+// width, height, top, left, right, bottom (layout props)
+// backgroundColor, color (style props)
+// padding, margin, borderWidth, borderRadius
+
+// Reanimated 2 — useNativeDriver is irrelevant
+// Everything runs on UI thread via JSI automatically
+// No flag needed
+```
+
+**Interview tip:** Forgetting `useNativeDriver: true` on transform/opacity animations is the most common cause of janky animations at senior level.
+
+---
+
+### Q233. What are the most common causes of React Native performance issues?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Performance
+
+**Answer:**
+```
+1. Unnecessary re-renders
+2. FlatList not optimised
+3. Animations on JS thread (no useNativeDriver)
+4. Heavy computation on JS thread during interaction
+5. Memory leaks (event listeners, async operations not cleaned up)
+6. Large bundle size (slow startup)
+7. Images not cached or oversized
+8. Excessive console.log in production
+9. Deep component trees without memoisation
+10. Bridge overload (old arch) — too many native calls
+```
+
+```js
+// 1. Unnecessary re-renders — use React DevTools Profiler to find
+// Fix: React.memo, useMemo, useCallback, proper key strategy
+
+// 2. FlatList — most impactful for list-heavy apps (ERP)
+<FlatList
+  removeClippedSubviews={true}     // unmount off-screen items
+  maxToRenderPerBatch={10}          // items per batch render
+  updateCellsBatchingPeriod={50}    // ms between batches
+  windowSize={5}                    // viewport windows to keep rendered
+  initialNumToRender={10}           // first batch size
+  getItemLayout={getItemLayout}     // skip dynamic height measurement
+/>
+
+// 3. Animations — always useNativeDriver: true (or Reanimated)
+
+// 4. Heavy computation — defer or move off-thread
+InteractionManager.runAfterInteractions(() => {
+  loadHeavyData(); // runs after animation finishes
+});
+
+// 5. Memory leaks — always clean up
+useEffect(() => {
+  const sub = someEvent.addListener(handler);
+  return () => sub.remove(); // cleanup on unmount
+}, []);
+
+// 8. Remove console.log in prod
+// babel-plugin-transform-remove-console — removes all console calls
+```
+
+---
+
+### Q234. How do you prevent unnecessary re-renders with `React.memo`, `useMemo`, `useCallback`?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Performance
+
+**Answer:**
+```js
+// React.memo — prevents re-render if props haven't changed (shallow comparison)
+const ExpensiveListItem = React.memo(({ item, onPress }) => {
+  console.log('Rendered:', item.id); // should only log when item or onPress changes
+  return (
+    <Pressable onPress={() => onPress(item.id)}>
+      <Text>{item.title}</Text>
+    </Pressable>
+  );
+});
+
+// ❌ Problem: new function reference on every parent render breaks React.memo
+const ParentList = () => {
+  const handlePress = (id) => navigate('Detail', { id }); // new ref each render!
+  return <FlatList renderItem={({ item }) => <ExpensiveListItem item={item} onPress={handlePress} />} />;
+};
+
+// ✅ Fix: useCallback stabilises the reference
+const ParentList = () => {
+  const navigation = useNavigation();
+  const handlePress = useCallback((id) => {
+    navigation.navigate('Detail', { id });
+  }, [navigation]); // only changes if navigation changes
+
+  const renderItem = useCallback(({ item }) => (
+    <ExpensiveListItem item={item} onPress={handlePress} />
+  ), [handlePress]);
+
+  return <FlatList renderItem={renderItem} data={items} />;
+};
+
+// useMemo — memoises expensive computed values
+const sortedEmployees = useMemo(() => {
+  return employees
+    .filter(e => e.department === selectedDept)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}, [employees, selectedDept]); // only recomputes when deps change
+
+// Custom comparison for React.memo
+const areEqual = (prevProps, nextProps) => {
+  return prevProps.item.id === nextProps.item.id &&
+         prevProps.item.updatedAt === nextProps.item.updatedAt;
+};
+export default React.memo(ListItem, areEqual);
+
+// When NOT to memoize:
+// - Simple components with cheap renders
+// - Components that always receive new props anyway
+// - Memoization itself has a cost (comparison) — don't over-apply
+```
+
+---
+
+### Q235. What is `getItemLayout` in FlatList and why does it matter?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** FlatList Performance
+
+**Answer:**
+By default FlatList measures each item's height dynamically. `getItemLayout` tells FlatList the exact dimensions without measurement — enabling instant scroll-to-index and dramatically faster rendering.
+
+```js
+const ITEM_HEIGHT = 72;
+const SEPARATOR_HEIGHT = 1;
+
+// For fixed-height items — precompute layout
+<FlatList
+  data={employees}
+  getItemLayout={(data, index) => ({
+    length: ITEM_HEIGHT + SEPARATOR_HEIGHT,
+    offset: (ITEM_HEIGHT + SEPARATOR_HEIGHT) * index,
+    index,
+  })}
+  renderItem={renderItem}
+/>
+
+// For items with headers/sections
+const HEADER_HEIGHT = 48;
+<FlatList
+  data={data}
+  ListHeaderComponent={<SectionHeader />}
+  getItemLayout={(data, index) => ({
+    length: ITEM_HEIGHT,
+    offset: HEADER_HEIGHT + ITEM_HEIGHT * index,
+    index,
+  })}
+/>
+
+// Benefits of getItemLayout:
+// 1. FlatList can jump to any index instantly (scrollToIndex)
+// 2. No layout measurement overhead on scroll
+// 3. Better initial render performance
+
+// Using scrollToIndex only works reliably WITH getItemLayout
+flatListRef.current?.scrollToIndex({
+  index: targetIndex,
+  animated: true,
+  viewPosition: 0.5, // 0 = top, 0.5 = center, 1 = bottom of viewport
+});
+
+// When items have dynamic height — use onLayout measurement + cache
+const itemHeights = useRef({});
+const getItemLayout = useCallback((data, index) => {
+  const height = itemHeights.current[index] || ESTIMATED_ITEM_HEIGHT;
+  const offset = data.slice(0, index).reduce((sum, _, i) =>
+    sum + (itemHeights.current[i] || ESTIMATED_ITEM_HEIGHT), 0
+  );
+  return { length: height, offset, index };
+}, []);
+```
+
+---
+
+### Q236. What is `removeClippedSubviews` and should you always enable it?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** FlatList Performance
+
+**Answer:**
+`removeClippedSubviews={true}` detaches native views of off-screen FlatList items from the view hierarchy, reducing memory usage and improving scroll performance. The items remain in the React tree but their native backing views are detached.
+
+```js
+<FlatList
+  data={largeDataset}
+  removeClippedSubviews={true}    // detach off-screen native views
+  renderItem={renderItem}
+/>
+```
+
+**Caveats — don't always blindly enable:**
+```js
+// ❌ Known issue 1: content clipping bugs on Android
+// Items near the edges may occasionally clip or flash
+// If you see this, disable it
+
+// ❌ Known issue 2: breaks some absolute-positioned overlays
+// If list items have tooltips/dropdowns that extend beyond the item bounds,
+// removeClippedSubviews will clip them
+
+// ❌ Known issue 3: can cause blank flashes on fast scroll
+// The item re-attaches as you scroll to it — may show blank briefly
+
+// ✅ Safe to enable for:
+// - Simple list items (text + image, no overflow content)
+// - Very long lists (1000+ items)
+// - Lists with fixed, predictable item height
+
+// Better alternative for extreme cases: windowSize
+<FlatList
+  windowSize={5}        // render 5 viewports worth (2 above, 2 below current)
+  initialNumToRender={10} // first render batch
+  maxToRenderPerBatch={5} // items rendered per batch during scroll
+/>
+```
+
+---
+
+### Q237. How do you profile a React Native app to find performance issues?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Profiling
+
+**Answer:**
+```js
+// Tool 1: React DevTools Profiler (via Flipper or browser)
+// Steps:
+// 1. Open Flipper → React DevTools → Profiler tab
+// 2. Click Record
+// 3. Interact with the slow part of your app
+// 4. Stop recording
+// 5. Flamegraph shows: which components rendered, how long each took
+// Look for: unexpected re-renders (components that lit up when they shouldn't)
+
+// Tool 2: Native Systrace (Android)
+// adb shell am start -n com.android.traceur/.MainActivity
+// Captures JS thread, UI thread, GPU frames
+
+// Tool 3: Xcode Instruments (iOS)
+// Product → Profile → Time Profiler
+// Shows CPU usage per function on each thread
+
+// Tool 4: In-app FPS monitor
+// Dev menu → Show Perf Monitor
+// Watch JS FPS and UI FPS simultaneously
+
+// Tool 5: Hermes sampling profiler (production-realistic)
+// In __DEV__ = false mode, Hermes records JS CPU samples
+// View in Chrome DevTools
+
+// Code-level profiling
+import { Profiler } from 'react';
+
+<Profiler
+  id="EmployeeList"
+  onRender={(id, phase, actualDuration, baseDuration) => {
+    if (actualDuration > 16) {
+      console.warn(`Slow render in ${id}: ${actualDuration.toFixed(1)}ms`);
+    }
+  }}
+>
+  <EmployeeList employees={employees} />
+</Profiler>
+// actualDuration: time for this render
+// baseDuration: estimated time without memoisation
+// If baseDuration >> actualDuration: memo is working well
+
+// Performance marks (custom timestamps)
+console.time('loadDashboard');
+await loadDashboardData();
+console.timeEnd('loadDashboard'); // logs: loadDashboard: 342.5ms
+```
+
+---
+
+### Q238. What are memory leaks in React Native and how do you find them?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Memory
+
+**Answer:**
+A memory leak occurs when objects are retained in memory after they're no longer needed — growing heap until the app crashes or becomes sluggish.
+
+**Common sources in React Native:**
+
+```js
+// 1. Event listeners not cleaned up
+useEffect(() => {
+  const sub = AppState.addEventListener('change', handleAppState);
+  // ❌ Missing cleanup:
+  // return () => sub.remove();
+}, []);
+
+// 2. Async operations that setState after unmount
+useEffect(() => {
+  let isMounted = true;
+  fetchData().then(data => {
+    if (isMounted) setData(data); // ✅ guard
+  });
+  return () => { isMounted = false; }; // cleanup
+}, []);
+
+// 3. Interval/timeout not cleared
+useEffect(() => {
+  const interval = setInterval(() => {
+    fetchNewMessages();
+  }, 5000);
+  return () => clearInterval(interval); // ✅ always clear
+}, []);
+
+// 4. Large closures captured by event handlers
+const [bigData, setBigData] = useState(new Array(10000).fill('data'));
+
+const handlePress = useCallback(() => {
+  // bigData is captured in closure — keeps 10k items in memory
+  // even if component re-renders with new data
+  console.log(bigData.length);
+}, [bigData]); // correct dependency, but be aware of closure size
+
+// 5. Image/video not released (rare in RN but possible with custom native modules)
+
+// Detecting leaks:
+// Flipper → Memory tab → take heap snapshot before and after navigating
+// If heap grows and doesn't shrink → leak
+// Android: Android Studio → Memory Profiler
+// iOS: Instruments → Leaks / Allocations
+```
+
+---
+
+### Q239. How do you fix the most common memory leak patterns?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Memory
+
+**Answer:**
+```js
+// Pattern 1: Subscription cleanup
+useEffect(() => {
+  const keyboardSub = Keyboard.addListener('keyboardDidShow', handler);
+  const appStateSub = AppState.addEventListener('change', handler2);
+  const dimensionSub = Dimensions.addEventListener('change', handler3);
+  const netInfoSub = NetInfo.addEventListener(handler4);
+
+  return () => {
+    keyboardSub.remove();
+    appStateSub.remove();
+    dimensionSub.remove();
+    netInfoSub();  // NetInfo returns unsubscribe function directly
+  };
+}, []);
+
+// Pattern 2: Cancellable async with AbortController
+useEffect(() => {
+  const controller = new AbortController();
+
+  fetch('/api/employees', { signal: controller.signal })
+    .then(res => res.json())
+    .then(data => setEmployees(data))
+    .catch(err => {
+      if (err.name !== 'AbortError') console.error(err);
+    });
+
+  return () => controller.abort(); // cancel fetch on unmount
+}, []);
+
+// Pattern 3: Axios cancel token
+useEffect(() => {
+  const source = axios.CancelToken.source();
+
+  axios.get('/api/data', { cancelToken: source.token })
+    .then(res => setData(res.data))
+    .catch(err => { if (!axios.isCancel(err)) console.error(err); });
+
+  return () => source.cancel('Component unmounted');
+}, []);
+
+// Pattern 4: useRef isMounted guard (older pattern, still valid)
+const isMountedRef = useRef(true);
+useEffect(() => {
+  return () => { isMountedRef.current = false; };
+}, []);
+
+const safeFetch = async () => {
+  const data = await fetchData();
+  if (isMountedRef.current) setData(data);
+};
+
+// Pattern 5: Reanimated shared values — no cleanup needed
+// Shared values are automatically garbage collected when no longer referenced
+```
+
+---
+
+### Q240. What is `InteractionManager` and when should you use it?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Performance
+
+**Answer:**
+`InteractionManager` lets you defer heavy work until all JS animations and interactions have completed — keeps the UI smooth during transitions and gesture feedback.
+
+```js
+import { InteractionManager } from 'react-native';
+
+// Run after all animations complete
+useEffect(() => {
+  const task = InteractionManager.runAfterInteractions(() => {
+    // Heavy work here — runs after navigation animation settles
+    loadHeavyCharts();
+    processLargeDataset();
+    initializeWebSocket();
+  });
+
+  return () => task.cancel(); // cancel if component unmounts before task runs
+}, []);
+
+// Navigation + data loading pattern
+// ❌ Bad — starts heavy fetch during screen transition animation
+const EmployeeScreen = () => {
+  useEffect(() => {
+    fetchAllEmployees(); // runs during nav animation → janky transition
+  }, []);
+};
+
+// ✅ Good — waits for animation to finish
+const EmployeeScreen = () => {
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => {
+      fetchAllEmployees();
+    });
+    return () => task.cancel();
+  }, []);
+};
+
+// Show loading while waiting
+const [ready, setReady] = useState(false);
+useEffect(() => {
+  const task = InteractionManager.runAfterInteractions(() => setReady(true));
+  return () => task.cancel();
+}, []);
+
+if (!ready) return <SkeletonScreen />;
+return <FullContent />;
+
+// Create your own interaction handle
+const handle = InteractionManager.createInteractionHandle();
+// ... run animation ...
+InteractionManager.clearInteractionHandle(handle); // signals animation done
+```
+
+---
+
+### Q241. How do you optimise a FlatList rendering 1,000+ items?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Very High | **Category:** FlatList Performance
+
+**Answer:**
+```js
+const ITEM_HEIGHT = 72;
+const SEPARATOR_HEIGHT = StyleSheet.hairlineWidth;
+const ITEM_TOTAL = ITEM_HEIGHT + SEPARATOR_HEIGHT;
+
+const OptimisedFlatList = ({ data }) => {
+  // 1. Stable keyExtractor — avoid index as key
+  const keyExtractor = useCallback((item) => item.id.toString(), []);
+
+  // 2. Memoised renderItem — prevents recreation on parent re-render
+  const renderItem = useCallback(({ item }) => (
+    <EmployeeRow employee={item} />
+  ), []);
+
+  // 3. getItemLayout — skip dynamic height measurement
+  const getItemLayout = useCallback((_, index) => ({
+    length: ITEM_TOTAL,
+    offset: ITEM_TOTAL * index,
+    index,
+  }), []);
+
+  // 4. ItemSeparatorComponent — more efficient than margin in items
+  const ItemSeparator = useCallback(() => (
+    <View style={{ height: SEPARATOR_HEIGHT, backgroundColor: '#E0E0E0' }} />
+  ), []);
+
+  return (
+    <FlatList
+      data={data}
+      keyExtractor={keyExtractor}
+      renderItem={renderItem}
+      getItemLayout={getItemLayout}
+      ItemSeparatorComponent={ItemSeparator}
+
+      // 5. Virtualisation tuning
+      initialNumToRender={12}         // first visible screen worth
+      maxToRenderPerBatch={10}        // items per scroll batch
+      updateCellsBatchingPeriod={50}  // ms between batches
+      windowSize={7}                  // 3 screens above + 3 below current
+      removeClippedSubviews={true}    // detach off-screen native views (Android safe)
+
+      // 6. Content container style instead of wrapper View
+      contentContainerStyle={{ paddingBottom: 16 }}
+
+      // 7. Avoid inline functions / objects in props
+      // ❌ style={{ flex: 1 }} on FlatList itself creates new obj each render
+      style={styles.list}  // ✅ from StyleSheet
+
+      // 8. Disable scroll indicator if not needed
+      showsVerticalScrollIndicator={false}
+    />
+  );
+};
+
+// 9. Keep list item components lean
+const EmployeeRow = React.memo(({ employee }) => (
+  <View style={styles.row}>
+    <FastImage source={{ uri: employee.avatar }} style={styles.avatar} />
+    <View style={styles.info}>
+      <Text style={styles.name}>{employee.name}</Text>
+      <Text style={styles.role}>{employee.role}</Text>
+    </View>
+  </View>
+));
+```
+
+---
+
+### Q242. What is `windowSize` on FlatList and how do you choose the right value?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** FlatList Performance
+
+**Answer:**
+`windowSize` determines how many **viewport-heights** worth of items FlatList keeps rendered. The default is 21 (10 screens above + current + 10 screens below).
+
+```js
+// windowSize={21} (default) — keeps 21 screens worth rendered
+// windowSize={5}  — keeps 5 screens (2 above + current + 2 below)
+// windowSize={1}  — only current viewport (most memory-efficient, most blank flash risk)
+
+<FlatList
+  windowSize={7}  // recommended sweet spot for most apps
+  data={data}
+  renderItem={renderItem}
+/>
+
+// Tradeoffs:
+// Higher windowSize (21):
+//   ✅ No blank flash on scroll
+//   ❌ More items in memory
+//   ❌ More initial render time
+//
+// Lower windowSize (3-5):
+//   ✅ Less memory usage
+//   ✅ Faster initial render
+//   ❌ Blank flashes on very fast scroll
+
+// For your ERP employee list (300-500 employees):
+// windowSize={7} — 3 screens buffer each direction — good balance
+
+// For photo gallery (heavy images):
+// windowSize={3} — memory is more important
+
+// For chat messages (small, fast scroll):
+// windowSize={10} — smooth scroll experience more important
+
+// windowSize works with maxToRenderPerBatch and updateCellsBatchingPeriod:
+<FlatList
+  windowSize={7}
+  maxToRenderPerBatch={8}         // items rendered per "tick" during scroll
+  updateCellsBatchingPeriod={50}  // 50ms between render batches
+  initialNumToRender={10}         // first synchronous render batch
+/>
+```
+
+---
+
+### Q243. How do you measure and reduce the JavaScript bundle size?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Bundle Optimisation
+
+**Answer:**
+```bash
+# Step 1: Generate bundle and sourcemap
+npx react-native bundle \
+  --platform ios \
+  --dev false \
+  --entry-file index.js \
+  --bundle-output ./bundle/main.jsbundle \
+  --sourcemap-output ./bundle/main.jsbundle.map
+
+# Step 2: Analyse with source-map-explorer
+npm install -g source-map-explorer
+source-map-explorer ./bundle/main.jsbundle ./bundle/main.jsbundle.map
+
+# Or use bundle-buddy for a different visualization
+npx bundle-buddy ./bundle/main.jsbundle.map
+```
+
+```js
+// Common bundle size culprits and fixes:
+
+// 1. moment.js — huge locale files (67KB gzipped)
+// ❌ import moment from 'moment';
+// ✅ import dayjs from 'dayjs'; // 2KB gzipped
+// ✅ Or: import { format } from 'date-fns'; // tree-shakeable
+
+// 2. lodash — importing the whole library
+// ❌ import _ from 'lodash';
+// ✅ import debounce from 'lodash/debounce'; // only import what you need
+// ✅ import { debounce } from 'lodash-es'; // tree-shakeable version
+
+// 3. Icons — loading all icons
+// ❌ import Icon from 'react-native-vector-icons/MaterialIcons'; // all icons
+// ✅ Only the icon sets you use (configure in gradle/xcode)
+
+// 4. Unused dependencies — audit package.json regularly
+// depcheck — finds unused packages
+npx depcheck
+
+// 5. Large assets bundled in JS
+// ❌ require('./big-image.png') in JS — bundled into JS bundle
+// ✅ Store in Assets folder, reference via path
+
+// 6. babel-plugin-transform-remove-console
+// Removes all console.* calls from production bundle
+// metro.config.js:
+module.exports = {
+  transformer: {
+    minifierConfig: {
+      compress: { drop_console: true },
+    },
+  },
+};
+```
+
+---
+
+### Q244. What is Hermes and how does it improve performance?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** JS Engine Performance
+
+**Answer:**
+Hermes is a JavaScript engine built by Meta specifically for React Native. It replaces JavaScriptCore (JSC) as the default engine from RN 0.70+.
+
+**Key improvements over JSC:**
+
+| | JavaScriptCore | Hermes |
+|--|---------------|--------|
+| Bundle type | JS source → JIT at runtime | Pre-compiled bytecode |
+| TTI (Time to Interactive) | Slower (compiles on device) | Faster (already compiled) |
+| Memory usage | Higher | Lower (smaller heap) |
+| APK/IPA size | Larger | Smaller (bytecode is smaller) |
+| Debugging | Chrome DevTools | Hermes debugger |
+
+```js
+// Enable Hermes (android/app/build.gradle)
+project.ext.react = [
+  enableHermes: true,
+]
+
+// Enable Hermes (iOS — Podfile)
+use_react_native!(
+  :hermes_enabled => true
+)
+
+// Check if Hermes is running
+const isHermes = () => !!global.HermesInternal;
+console.log('Hermes:', isHermes()); // true in Hermes, false in JSC
+
+// Hermes-specific optimisations:
+// 1. Bytecode pre-compilation — JS compiled to bytecode at build time
+//    Metro bundler outputs .hbc file instead of .jsbundle
+// 2. Lazy loading — functions compiled lazily, not all upfront
+// 3. Static analysis — better dead code elimination at compile time
+// 4. GC improvements — generational garbage collector, lower pause times
+
+// Profiling with Hermes:
+// 1. Shake device → Open Debugger → Enable Sampling Profiler
+// 2. Interact with app
+// 3. Stop profiler → download .cpuprofile
+// 4. Open in Chrome DevTools → Performance tab → Load profile
+```
+
+---
+
+### Q245. How do you implement code splitting and lazy loading in React Native?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Bundle Optimisation
+
+**Answer:**
+React Native's Metro bundler doesn't support dynamic `import()` for code splitting out of the box like webpack. You need RAM bundles or re-pack.
+
+```js
+// Method 1: React.lazy + Suspense (React 18, requires Hermes/JSC support)
+import React, { Suspense, lazy } from 'react';
+
+// Lazily loaded screen
+const HeavyAnalyticsScreen = lazy(() => import('./HeavyAnalyticsScreen'));
+
+const App = () => (
+  <Suspense fallback={<LoadingScreen />}>
+    <HeavyAnalyticsScreen />
+  </Suspense>
+);
+
+// Method 2: RAM Bundles (Metro feature)
+// Each module is loaded only when first required
+// Configure in metro.config.js:
+module.exports = {
+  serializer: {
+    processModuleFilter: module => true,
+  },
+};
+// Add to index.js:
+// @format
+// RAM bundle — each require() call loads the module on demand
+
+// Method 3: Re.Pack (webpack for RN — enables true code splitting)
+// https://re-pack.dev
+// Creates separate chunks loaded dynamically
+
+// Method 4: Manual lazy loading (simplest, always works)
+const LazyScreen = ({ navigation }) => {
+  const [Component, setComponent] = useState(null);
+
+  useEffect(() => {
+    // Load component only when screen first mounts
+    import('./HeavyComponent').then(module => {
+      setComponent(() => module.default);
+    });
+  }, []);
+
+  if (!Component) return <LoadingSpinner />;
+  return <Component navigation={navigation} />;
+};
+
+// Method 5: Defer non-critical modules
+// Put heavy requires inside functions instead of at module top level
+// ❌ import HeavyLib from 'heavy-lib'; // loads at app start
+// ✅ const getHeavyLib = () => require('heavy-lib'); // loads on first call
+```
+
+---
+
+### Q246. What is `console.log` doing to your production performance?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Performance
+
+**Answer:**
+`console.log` in production causes measurable performance degradation — each call:
+1. Serialises its arguments to strings (can be expensive for large objects)
+2. Crosses the bridge to native (in old architecture) to output to system logs
+3. Accumulates in memory if the remote debugger is connected
+
+```js
+// Remove console.log from production builds
+
+// Method 1: babel-plugin-transform-remove-console (recommended)
+// .babelrc or babel.config.js:
+module.exports = {
+  plugins: [
+    ...(__DEV__ ? [] : [['transform-remove-console', { exclude: ['error', 'warn'] }]]),
+  ],
+};
+
+// Method 2: Override console in production
+if (!__DEV__) {
+  const emptyFn = () => {};
+  console.log = emptyFn;
+  console.debug = emptyFn;
+  console.info = emptyFn;
+  // Keep console.error and console.warn for Sentry/crash reporting
+}
+
+// Method 3: Custom logger utility
+const logger = {
+  log: (...args) => { if (__DEV__) console.log(...args); },
+  warn: (...args) => console.warn(...args),           // always warn
+  error: (...args) => console.error(...args),         // always error
+  perf: (...args) => { if (__DEV__) console.log('[PERF]', ...args); },
+};
+
+export default logger;
+
+// Real performance impact:
+// console.log(largeArray) — serialises potentially MBs of data
+// In a FlatList with 1000 items, a console.log inside renderItem
+// = 1000 serialisations per render pass
+```
+
+---
+
+### Q247. How do you optimise image loading and caching in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Images + Performance
+
+**Answer:**
+```js
+// Problem: React Native's built-in Image component
+// - No disk caching by default on Android
+// - Each mount may re-download the image
+// - No progressive loading
+
+// Solution: react-native-fast-image (Glorified SDWebImage/Glide)
+import FastImage from 'react-native-fast-image';
+
+// Basic usage with priority and cache strategy
+<FastImage
+  source={{
+    uri: 'https://example.com/employee-avatar.jpg',
+    priority: FastImage.priority.normal,   // low, normal, high
+    cache: FastImage.cacheControl.immutable, // immutable, web, cacheOnly
+  }}
+  style={{ width: 60, height: 60, borderRadius: 30 }}
+  resizeMode={FastImage.resizeMode.cover}
+  onLoadStart={() => setLoading(true)}
+  onLoadEnd={() => setLoading(false)}
+/>
+
+// Preload images before they're needed
+FastImage.preload([
+  { uri: 'https://example.com/image1.jpg', priority: FastImage.priority.high },
+  { uri: 'https://example.com/image2.jpg' },
+]);
+
+// Clear cache
+FastImage.clearMemoryCache();
+FastImage.clearDiskCache();
+
+// Image optimisation tips:
+// 1. Serve correctly-sized images (don't serve 2000px for 60px avatar)
+// 2. Use CDN with image transformation (Cloudinary, imgix)
+//    https://res.cloudinary.com/demo/image/upload/w_120,h_120,c_fill/avatar.jpg
+
+// 3. Use WebP format (30% smaller than JPEG, lossless)
+<FastImage source={{ uri: imageUrl.replace('.jpg', '.webp') }} />
+
+// 4. Placeholder while loading
+const [loaded, setLoaded] = useState(false);
+<View>
+  {!loaded && <ShimmerPlaceholder style={styles.image} />}
+  <FastImage
+    source={{ uri }}
+    style={[styles.image, !loaded && styles.hidden]}
+    onLoad={() => setLoaded(true)}
+  />
+</View>
+
+// 5. Progressive JPEG — show blurry version first
+<Image source={{ uri }} blurRadius={loaded ? 0 : 10} />
+```
+
+---
+
+### Q248. What is `shouldComponentUpdate` equivalent in functional React Native components?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Performance
+
+**Answer:**
+```js
+// Class component equivalent
+class EmployeeRow extends PureComponent {
+  // PureComponent = shouldComponentUpdate with shallow prop comparison
+  render() {
+    return <View><Text>{this.props.employee.name}</Text></View>;
+  }
+}
+
+// Functional equivalent — React.memo
+const EmployeeRow = React.memo(({ employee }) => {
+  return <View><Text>{employee.name}</Text></View>;
+});
+// React.memo does shallow comparison by default
+
+// Deep custom comparison
+const EmployeeRow = React.memo(({ employee, onPress }) => {
+  return <Pressable onPress={() => onPress(employee.id)}><Text>{employee.name}</Text></Pressable>;
+}, (prevProps, nextProps) => {
+  // Return true = same = skip re-render
+  // Return false = different = re-render
+  return (
+    prevProps.employee.id === nextProps.employee.id &&
+    prevProps.employee.name === nextProps.employee.name &&
+    prevProps.employee.avatarUrl === nextProps.employee.avatarUrl &&
+    prevProps.onPress === nextProps.onPress // ← requires useCallback in parent
+  );
+});
+
+// useMemo for expensive derived data
+const processedData = useMemo(() => {
+  return rawData
+    .filter(item => item.active)
+    .map(item => ({ ...item, displayName: `${item.firstName} ${item.lastName}` }))
+    .sort((a, b) => a.displayName.localeCompare(b.displayName));
+}, [rawData]); // only reprocess when rawData changes
+
+// Common mistake: wrapping everything in useMemo/memo
+// Memoisation has overhead — only use when:
+// 1. The computation is expensive (>1ms)
+// 2. The component renders frequently with same props
+// 3. The component is in a list (FlatList)
+```
+
+---
+
+### Q249. How do you reduce the app startup time (Time to Interactive)?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Startup Performance
+
+**Answer:**
+```js
+// Time to Interactive (TTI) = time from app launch to first interactive screen
+
+// 1. Enable Hermes (biggest single win)
+// Bytecode pre-compilation → no JIT startup cost
+// 40-50% TTI improvement typical
+
+// 2. Inline Requires (Metro)
+// metro.config.js
+module.exports = {
+  transformer: {
+    getTransformOptions: async () => ({
+      transform: {
+        inlineRequires: true, // defer requires until first use
+      },
+    }),
+  },
+};
+
+// 3. Reduce bundle size (fewer modules to parse)
+// See Q243 for bundle analysis
+
+// 4. Splash screen — hide transition between native and RN
+import SplashScreen from 'react-native-splash-screen';
+
+// App.tsx
+useEffect(() => {
+  // Wait for initial data to load, then hide splash
+  const init = async () => {
+    await loadCriticalData(); // auth state, user prefs, theme
+    SplashScreen.hide();
+  };
+  init();
+}, []);
+
+// 5. Defer non-critical initialisation
+// ❌ Load everything before first render
+useEffect(() => {
+  initAnalytics();     // can wait
+  initPushNotifications(); // can wait
+  loadUserData();      // CRITICAL — load now
+  setupCrashReporting(); // can wait
+}, []);
+
+// ✅ Defer non-critical
+useEffect(() => {
+  loadUserData().then(() => {
+    // Defer these until after first render
+    InteractionManager.runAfterInteractions(() => {
+      initAnalytics();
+      initPushNotifications();
+      setupCrashReporting();
+    });
+  });
+}, []);
+
+// 6. Lazy-load heavy screens
+// Render AuthStack first, load AppStack only when authenticated
+// Don't pre-load screens the user may never visit
+
+// 7. Pre-warm React Native bridge (cold start only)
+// iOS: [ReactNativeFactory preWarm] in AppDelegate
+// Android: preload ReactInstanceManager in Application class
+
+// Measure TTI:
+// iOS: Instruments → App Launch template
+// Android: adb shell am start -W com.yourapp/.MainActivity
+// Flipper → Performance plugin
+```
+
+---
+
+### Q250. What is the `Hermes` bytecode compilation pipeline?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Low | **Category:** JS Engine
+
+**Answer:**
+```
+Source Code (.js)
+      ↓
+Metro Bundler (dev: transpile only, prod: bundle + minify)
+      ↓
+Hermes Compiler (hermes -emit-binary) — at BUILD TIME
+      ↓
+Hermes Bytecode (.hbc) — pre-compiled, no parsing at runtime
+      ↓
+Device: Hermes VM loads .hbc → execute directly
+```
+
+```bash
+# Manual compilation (for understanding)
+# hermes -emit-binary -out output.hbc input.js
+
+# In production builds:
+# Android: gradle builds .hbc automatically when Hermes enabled
+# iOS: react-native-xcode.sh handles it via Xcode build phase
+```
+
+```js
+// Development mode:
+// Hermes still uses JS source (for better debugging / sourcemaps)
+// No bytecode compilation in dev
+
+// Production mode:
+// Metro bundles → Hermes compiler produces .hbc
+// .hbc is shipped in the APK/IPA instead of .js
+
+// Benefits of .hbc:
+// - Parsing: zero cost (already parsed at build time)
+// - Startup: only execute, don't parse
+// - Size: .hbc is typically smaller than minified .js
+//   (binary format + dead code elimination at compile time)
+
+// Checking Hermes is active in a production build:
+// adb shell run-as com.yourapp cat files/ReactNativeResources/index.android.bundle | file -
+// Should show: data (binary) not: ASCII text
+```
+
+---
+
+### Q251. How do you measure and improve the Time to First Frame?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Startup Performance
+
+**Answer:**
+Time to First Frame (TTFF) = time from app launch until the first React Native frame renders.
+
+```js
+// Measure TTFF on Android
+// adb logcat | grep "ReactNative"
+// Look for: "ReactNativeJS: Running application" timestamp
+// Subtract from: ActivityManager: Displayed com.app/.MainActivity
+
+// Measure on iOS — Instruments → App Launch
+
+// Improve TTFF
+
+// 1. Minimise root component complexity
+// ❌ Heavy root component
+const App = () => {
+  const [config, setConfig] = useState(null);
+  useEffect(() => { loadLargeConfig().then(setConfig); }, []);
+
+  if (!config) return <SplashScreen />; // renders native splash
+  return <AppContent config={config} />;
+};
+
+// ✅ Show native splash (faster than React Native view) while loading
+// 2. Move heavy initialisation out of synchronous render
+
+// 3. Reduce synchronous work in root render
+// Every ms in synchronous render = ms delay to first frame
+// Move data loading to async, render skeleton immediately
+
+// 4. Reduce number of JS modules loaded synchronously
+// Check metro.config.js inlineRequires (defers require to first use)
+
+// 5. Profile with React Profiler
+<Profiler id="AppRoot" onRender={(id, phase, duration) => {
+  if (phase === 'mount') {
+    console.log(`First render: ${duration.toFixed(1)}ms`);
+  }
+}}>
+  <App />
+</Profiler>
+```
+
+---
+
+### Q252. What is `VirtualizedList` and how is it different from FlatList?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Lists + Performance
+
+**Answer:**
+`VirtualizedList` is the **base component** that `FlatList` and `SectionList` are built on. It implements virtualisation — only rendering items in and near the viewport.
+
+```js
+// FlatList = VirtualizedList with a simple array data prop
+// SectionList = VirtualizedList with sections support
+// VirtualizedList = lower-level, most flexible
+
+import { VirtualizedList } from 'react-native';
+
+// VirtualizedList requires: getItem, getItemCount, keyExtractor
+<VirtualizedList
+  data={myCustomData}  // can be any data structure (not just array)
+  getItemCount={(data) => data.size}          // how many items total
+  getItem={(data, index) => data.get(index)}  // get item at index
+  keyExtractor={(item) => item.id}
+  renderItem={({ item }) => <Row item={item} />}
+  getItemLayout={(data, index) => ({ length: 72, offset: 72 * index, index })}
+/>
+
+// Use VirtualizedList directly when:
+// 1. Your data source is not a plain array (Map, custom object, etc.)
+// 2. You need extreme control over the virtualisation behaviour
+// 3. Building a custom list component
+
+// FlatList is fine for 99% of cases
+// SectionList when you need grouped sections with sticky headers
+
+// All three share the same performance props:
+// initialNumToRender, maxToRenderPerBatch, windowSize, removeClippedSubviews
+// getItemLayout, keyExtractor (same interface)
+```
+
+---
+
+### Q253. What are `PureComponent` and `React.memo` and their caveats?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Performance
+
+**Answer:**
+Both prevent re-renders when props haven't changed, but have important caveats:
+
+```js
+// PureComponent — class component, shallow prop comparison
+class MyRow extends React.PureComponent {
+  render() { return <View><Text>{this.props.title}</Text></View>; }
+}
+
+// React.memo — functional component equivalent
+const MyRow = React.memo(({ title }) => <View><Text>{title}</Text></View>);
+
+// CAVEAT 1: shallow comparison — new objects/arrays always trigger re-render
+const Parent = () => {
+  // ❌ New array on every render — breaks memo!
+  return <MyList data={[1, 2, 3]} />;
+};
+// ✅ Stable reference
+const DATA = [1, 2, 3];
+const Parent = () => <MyList data={DATA} />;
+
+// Or with useMemo:
+const data = useMemo(() => [1, 2, 3], []);
+
+// CAVEAT 2: inline functions break memo
+const Parent = () => {
+  // ❌ New function reference on every render
+  return <Button onPress={() => doSomething()} />;
+};
+// ✅ useCallback for stable reference
+const handlePress = useCallback(() => doSomething(), []);
+
+// CAVEAT 3: Context changes propagate through memo
+// If a memoised component consumes Context, it re-renders on context change
+// regardless of memo
+
+// CAVEAT 4: Forwardref components need memo wrapping explicitly
+const ForwardedInput = React.memo(React.forwardRef((props, ref) => (
+  <TextInput ref={ref} {...props} />
+)));
+
+// When memo HURTS (anti-pattern):
+// - Very simple, cheap-to-render components
+// - Components that always receive new props anyway
+// - Costs: extra comparison function call, closure allocation
+```
+
+---
+
+### Q254. How do you find and fix re-render waterfalls?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Performance
+
+**Answer:**
+A re-render waterfall happens when a state update in a parent causes a chain of re-renders through children, even when children's own data hasn't changed.
+
+```js
+// Diagnosing: react-addons-perf (old) or React DevTools Profiler (new)
+// Also: why-did-you-render library
+
+// Setup why-did-you-render
+// wdyr.js
+import React from 'react';
+if (__DEV__) {
+  const whyDidYouRender = require('@welldone-software/why-did-you-render');
+  whyDidYouRender(React, {
+    trackAllPureComponents: true,
+    logOnDifferentValues: true, // logs what changed
+  });
+}
+
+// In component to track:
+MyComponent.whyDidYouRender = true;
+
+// Common waterfall patterns and fixes:
+
+// 1. Context causing all consumers to re-render
+// ❌ One context for everything
+const AppContext = createContext({ user, theme, notifications, cart });
+
+// ✅ Split contexts
+const UserContext = createContext(user);
+const ThemeContext = createContext(theme);
+// Each component only consumes what it needs
+
+// 2. Redux mapStateToProps selecting too much
+// ❌ Selecting whole state slice
+const mapState = (state) => ({ everything: state.employees });
+
+// ✅ Select minimal data with reselect
+const selectSortedEmployees = createSelector(
+  state => state.employees.list,
+  state => state.employees.sortBy,
+  (list, sortBy) => [...list].sort(...)
+);
+
+// 3. Parent re-renders because its own state changes
+// but children don't depend on that state
+const Parent = () => {
+  const [inputValue, setInputValue] = useState(''); // changes on every keystroke
+  const expensiveData = computeExpensiveData(); // recalculates on every keystroke!
+
+  return (
+    <View>
+      <TextInput value={inputValue} onChangeText={setInputValue} />
+      <ExpensiveChild data={expensiveData} /> {/* re-renders on every keystroke! */}
+    </View>
+  );
+};
+
+// ✅ Separate state and memoize
+const Parent = () => {
+  const [inputValue, setInputValue] = useState('');
+  const expensiveData = useMemo(() => computeExpensiveData(), []); // stable
+  const handleChange = useCallback((text) => setInputValue(text), []);
+
+  return (
+    <View>
+      <TextInput value={inputValue} onChangeText={handleChange} />
+      <MemoizedExpensiveChild data={expensiveData} /> {/* won't re-render */}
+    </View>
+  );
+};
+```
+
+---
+
+### Q255. How do you optimise Redux performance in a large React Native app?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** State + Performance
+
+**Answer:**
+```js
+// 1. Memoised selectors with reselect
+import { createSelector } from '@reduxjs/toolkit';
+
+const selectEmployees = state => state.employees.list;
+const selectDept = state => state.filters.department;
+
+// Memoised — only recomputes when employees or dept changes
+const selectFilteredEmployees = createSelector(
+  [selectEmployees, selectDept],
+  (employees, dept) => dept === 'all'
+    ? employees
+    : employees.filter(e => e.department === dept)
+);
+
+// 2. useSelector with equality function
+import { shallowEqual, useSelector } from 'react-redux';
+
+// ❌ New object on every select — triggers re-render every dispatch
+const { name, role } = useSelector(state => ({
+  name: state.user.name,
+  role: state.user.role,
+}));
+
+// ✅ shallowEqual — only re-render if name or role actually changes
+const { name, role } = useSelector(
+  state => ({ name: state.user.name, role: state.user.role }),
+  shallowEqual
+);
+
+// 3. Split large slices — components only subscribe to relevant parts
+// One slice per domain: userSlice, employeesSlice, attendanceSlice
+
+// 4. Normalise state with @reduxjs/toolkit createEntityAdapter
+import { createEntityAdapter } from '@reduxjs/toolkit';
+
+const employeesAdapter = createEntityAdapter();
+// Stores: { ids: ['1','2'], entities: {'1': emp1, '2': emp2} }
+// O(1) lookups, no array scanning
+
+// 5. Batch dispatches — RTK handles this automatically in RN 18
+// For older RN: unstable_batchedUpdates
+import { unstable_batchedUpdates } from 'react-native';
+
+unstable_batchedUpdates(() => {
+  dispatch(setEmployees(data));
+  dispatch(setLoading(false));
+  dispatch(setLastFetched(Date.now()));
+  // All three batched into one React render pass
+});
+
+// 6. RTK Query — automatic caching, deduplication, background refresh
+import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+
+const api = createApi({
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  endpoints: builder => ({
+    getEmployees: builder.query({ query: () => '/employees' }),
+  }),
+});
+// Auto-caches, doesn't re-fetch if data is fresh, deduplicates concurrent requests
+```
+
+---
+
+### Q256. What is excessive re-rendering and how do you audit for it?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Performance
+
+**Answer:**
+```js
+// Quick audit in development — add render counter to suspect components
+const renderCount = useRef(0);
+renderCount.current++;
+console.log(`MyComponent rendered ${renderCount.current} times`);
+
+// More detailed — log what changed
+import { useEffect, useRef } from 'react';
+const usePrevious = (value) => {
+  const ref = useRef();
+  useEffect(() => { ref.current = value; });
+  return ref.current;
+};
+
+const MyComponent = ({ propA, propB, propC }) => {
+  const prevA = usePrevious(propA);
+  const prevB = usePrevious(propB);
+  const prevC = usePrevious(propC);
+
+  if (__DEV__) {
+    if (prevA !== propA) console.log('propA changed:', prevA, '->', propA);
+    if (prevB !== propB) console.log('propB changed:', prevB, '->', propB);
+    if (prevC !== propC) console.log('propC changed:', prevC, '->', propC);
+  }
+};
+
+// React DevTools Profiler — visual audit
+// 1. Open React DevTools → Profiler
+// 2. Enable "Highlight updates when components render" in settings
+//    (painted rectangles flash on components when they re-render)
+// 3. Interact with the app
+// 4. Components that flash too frequently are candidates for memoisation
+
+// Why-did-you-render — logs re-renders with reason to console
+import './wdyr'; // setup (see Q254)
+MyList.whyDidYouRender = true;
+// Console: MyList re-rendered. prevProps.data !== nextProps.data
+// {a: 1, b: 2} vs {a: 1, b: 2} (different reference, same value)
+// → Need useMemo or stable reference
+```
+
+---
+
+### Q257. How do you profile startup performance with Flipper?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Profiling Tools
+
+**Answer:**
+```js
+// Flipper is the official RN debugging platform (desktop app)
+// Install: https://fbflipper.com
+
+// Startup performance plugins in Flipper:
+
+// 1. Hermes Debugger — JS profiling (replaces Chrome DevTools for Hermes)
+// Flipper → Hermes Debugger → Profiler → Record
+// Shows: function call tree, CPU time per function
+
+// 2. React DevTools → Profiler
+// Shows: component render tree, which components rendered, render duration
+
+// 3. Performance Plugin (community)
+// Shows: JS/UI FPS, memory usage over time, network timing
+
+// 4. Network Inspector
+// Shows: all HTTP/HTTPS requests, request/response timing
+// Identify slow API calls on startup
+
+// Manual startup timing
+// index.js (very first file)
+global.__appStartTime = Date.now();
+
+// Your first screen component
+useEffect(() => {
+  const startupTime = Date.now() - global.__appStartTime;
+  console.log(`App startup: ${startupTime}ms`);
+  // Track in analytics
+  analytics.track('app_startup', { duration: startupTime });
+}, []);
+
+// Mark specific milestones
+performance.mark('authCheckStart');
+await checkAuthState();
+performance.mark('authCheckEnd');
+performance.measure('authCheck', 'authCheckStart', 'authCheckEnd');
+```
+
+---
+
+### Q258. How does React Native handle overdraw and how do you reduce it?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Low | **Category:** Rendering Performance
+
+**Answer:**
+Overdraw occurs when a pixel is drawn multiple times in a single frame — every transparent or overlapping layer multiplies GPU work.
+
+```
+Level 0 (no overdraw):   white
+Level 1 (1x overdraw):   blue
+Level 2 (2x overdraw):   green
+Level 3 (3x overdraw):   pink
+Level 4+ (4x overdraw):  red  ← problem
+```
+
+```js
+// Detect on Android:
+// Developer Options → Debug GPU Overdraw → Show overdraw areas
+// Red areas = 4x+ overdraw → optimize
+
+// Common sources of overdraw:
+
+// 1. Stacked Views with backgrounds
+<View style={{ backgroundColor: 'white' }}>  {/* layer 1 */}
+  <View style={{ backgroundColor: 'white' }}> {/* layer 2 — redundant! */}
+    <View style={{ backgroundColor: 'white' }}> {/* layer 3 — redundant! */}
+      <Text>Content</Text>
+    </View>
+  </View>
+</View>
+
+// ✅ Fix: remove redundant background colors
+<View style={{ backgroundColor: 'white' }}>
+  <View> {/* no background — transparent */}
+    <Text>Content</Text>
+  </View>
+</View>
+
+// 2. Modal with semi-transparent backdrop + content background
+// Can't avoid all overdraw here — minimize layers
+
+// 3. Images with background color AND image overlapping
+<View style={{ backgroundColor: '#f0f0f0', borderRadius: 8 }}>
+  {/* If image covers entire view, the backgroundColor never shows */}
+  <Image source={...} style={{ width: '100%', height: '100%' }} />
+</View>
+// ✅ Fix: no background if fully covered by image
+
+// 4. Shadow layers (iOS) — each shadow is a composited layer
+// Minimize shadow usage on frequently-rendered list items
+
+// 5. Opacity < 1 creates a composited layer
+// Only use opacity: 0/1 (binary) or opacity with Reanimated for animations
+```
+
+---
+
+### Q259. How do you handle large datasets without pagination in React Native?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Lists + Performance
+
+**Answer:**
+```js
+// Scenario: offline ERP app, 5,000 employees, no server pagination
+
+// Strategy 1: Client-side virtualised FlatList (already covered Q241)
+// FlatList virtualises rendering — only renders ~15-20 items at a time
+// 5,000 items in FlatList: only render 20, virtualise 4,980
+// ✅ Works well up to ~50,000 items with proper getItemLayout
+
+// Strategy 2: Chunked loading into state
+const CHUNK_SIZE = 200;
+
+const EfficientEmployeeList = () => {
+  const [visibleData, setVisibleData] = useState([]);
+  const allData = useRef([]);
+
+  useEffect(() => {
+    const loadChunks = async () => {
+      const fullList = await getAllEmployees();
+      allData.current = fullList;
+
+      // Load first chunk immediately
+      setVisibleData(fullList.slice(0, CHUNK_SIZE));
+
+      // Load remaining chunks after interaction
+      InteractionManager.runAfterInteractions(() => {
+        // Load in chunks to avoid UI freeze
+        for (let i = CHUNK_SIZE; i < fullList.length; i += CHUNK_SIZE) {
+          setTimeout(() => {
+            setVisibleData(prev => [...prev, ...fullList.slice(i, i + CHUNK_SIZE)]);
+          }, (i / CHUNK_SIZE) * 100); // stagger by 100ms per chunk
+        }
+      });
+    };
+    loadChunks();
+  }, []);
+
+  return <FlatList data={visibleData} renderItem={renderItem} getItemLayout={getItemLayout} />;
+};
+
+// Strategy 3: Search-filtered view (most practical for ERP)
+const [searchQuery, setSearchQuery] = useState('');
+const [page, setPage] = useState(50); // start with 50, expand on scroll
+
+const filteredData = useMemo(() => {
+  const filtered = searchQuery
+    ? allEmployees.filter(e => e.name.toLowerCase().includes(searchQuery.toLowerCase()))
+    : allEmployees.slice(0, page);
+  return filtered;
+}, [allEmployees, searchQuery, page]);
+
+const loadMore = useCallback(() => {
+  setPage(prev => Math.min(prev + 50, allEmployees.length));
+}, [allEmployees.length]);
+```
+
+---
+
+### Q260. What is `useMemo` for style objects and when is it worth it?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Performance
+
+**Answer:**
+```js
+// Inline style objects create new references on every render
+// This breaks React.memo for child components that receive the style as a prop
+
+// ❌ New object every render — breaks memo for children
+const MyComponent = ({ isActive, size }) => (
+  <View style={{ width: size, backgroundColor: isActive ? '#6200EE' : '#ccc' }}>
+    <Text>Content</Text>
+  </View>
+);
+
+// ✅ useMemo for dynamic styles passed to memoised children
+const MyComponent = ({ isActive, size }) => {
+  const containerStyle = useMemo(() => ({
+    width: size,
+    backgroundColor: isActive ? '#6200EE' : '#ccc',
+  }), [isActive, size]);
+
+  return (
+    <View style={containerStyle}>
+      <Text>Content</Text>
+    </View>
+  );
+};
+
+// ✅ Better: StyleSheet.create for static styles (computed once at load time)
+const styles = StyleSheet.create({
+  active: { backgroundColor: '#6200EE' },
+  inactive: { backgroundColor: '#ccc' },
+});
+
+// Compose dynamic + static
+<View style={[styles.container, { width: size }, isActive ? styles.active : styles.inactive]}>
+
+// When useMemo for styles IS worth it:
+// - Style is complex to compute (involves math, multiple conditions)
+// - Style is passed as prop to a React.memo child
+// - Style changes infrequently relative to component renders
+
+// When it's NOT worth it:
+// - Style is passed only to native elements (View, Text) — they don't use React.memo
+// - Style computation is trivially cheap
+// - Component is already memoised for other reasons
+```
+
+---
+
+### Q261. How do you batch state updates in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Performance
+
+**Answer:**
+```js
+// React 18+ (React Native 0.71+) — automatic batching everywhere
+// Multiple state updates in async functions, timeouts, and event handlers
+// are automatically batched into one re-render
+
+// React 18 — automatic batching
+const handleSubmit = async () => {
+  await saveEmployee(data);
+  setLoading(false);     // batched
+  setEmployee(null);     // batched
+  setSuccess(true);      // batched
+  // Single re-render for all three — automatic in React 18
+};
+
+// React 17 and earlier — only event handlers were batched
+// async/timeout updates caused multiple re-renders
+// Fix: unstable_batchedUpdates
+import { unstable_batchedUpdates } from 'react-native';
+
+const handleOldReactSubmit = async () => {
+  await saveEmployee(data);
+  unstable_batchedUpdates(() => {
+    setLoading(false);     // batched
+    setEmployee(null);     // batched
+    setSuccess(true);      // batched
+    // Single re-render — React 17 compatible
+  });
+};
+
+// Opt OUT of batching (rare need):
+import { flushSync } from 'react-dom'; // React 18
+const handleEdgeCase = () => {
+  flushSync(() => { setA(1); }); // forces immediate re-render for A
+  flushSync(() => { setB(2); }); // then immediate re-render for B
+};
+
+// Redux RTK — batches multiple dispatches automatically (React 18)
+// In React 17: use unstable_batchedUpdates around dispatch calls
+```
+
+---
+
+### Q262. How do you optimise heavy computation that runs on the JS thread?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** JS Thread Performance
+
+**Answer:**
+```js
+// Option 1: Web Workers via react-native-workers or react-native-threads
+import { DataWorker } from 'react-native-workers';
+
+const worker = new DataWorker('./dataProcessingWorker.js');
+worker.postMessage({ data: rawPayrollData });
+worker.onmessage = (event) => {
+  const { processedData } = event.data;
+  setPayrollData(processedData);
+};
+
+// worker.js (runs on a separate JS thread)
+self.onmessage = (event) => {
+  const { data } = event.data;
+  const result = data.map(processPayrollItem).reduce(aggregatePayroll, {});
+  self.postMessage({ processedData: result });
+};
+
+// Option 2: Native module for CPU-intensive work
+// Write the computation in Swift/Kotlin, call via TurboModule
+// Best for: image processing, encryption, large data transformations
+
+// Option 3: Defer and chunk on JS thread
+const processInChunks = async (data, chunkSize = 100) => {
+  const results = [];
+  for (let i = 0; i < data.length; i += chunkSize) {
+    const chunk = data.slice(i, i + chunkSize);
+    const processed = chunk.map(heavyProcessItem);
+    results.push(...processed);
+    // Yield to event loop between chunks — allows UI to update
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  return results;
+};
+
+// Option 4: Memoize expensive computations
+const memoized = useMemo(() => expensiveComputation(input), [input]);
+
+// Option 5: Use a library with native backing
+// React Native Reanimated 2 — runs worklets on UI thread
+// React Native Vision Camera — ML/CV on dedicated thread
+// MMKV — synchronous storage on native thread
+```
+
+---
+
+### Q263. What is `setNativeProps` and when should you use it?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Low | **Category:** Performance
+
+**Answer:**
+`setNativeProps` updates native component properties directly without going through the React reconciler — useful for highly interactive animations that can't use Reanimated.
+
+```js
+const inputRef = useRef(null);
+
+// Direct native update — bypasses React render cycle
+inputRef.current.setNativeProps({
+  text: 'Hello',
+  style: { color: '#6200EE' },
+});
+
+// Use case 1: Updating text input value during rapid typing
+// without setState (avoids re-render on each keystroke)
+const TextCounter = () => {
+  const counterRef = useRef(null);
+  let count = 0;
+
+  return (
+    <View>
+      <TextInput onChangeText={() => {
+        count++;
+        counterRef.current?.setNativeProps({ text: `${count} chars` });
+        // No setState → no re-render → no jank
+      }} />
+      <TextInput ref={counterRef} editable={false} value="0 chars" />
+    </View>
+  );
+};
+
+// Modern alternative: Reanimated's useAnimatedProps is better
+// setNativeProps has these limitations:
+// 1. Only updates specific properties, not all
+// 2. Not tracked by React reconciler — state and view can diverge
+// 3. Not type-safe
+// 4. Deprecated in New Architecture (Fabric uses a different mechanism)
+
+// Prefer: Reanimated useAnimatedProps for performance-critical prop updates
+const animatedProps = useAnimatedProps(() => ({
+  text: String(counter.value),
+}));
+```
+
+---
+
+### Q264. How do you reduce bridge traffic in React Native (old architecture)?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Architecture + Performance
+
+**Answer:**
+In the old architecture, every JS↔Native communication crosses the async bridge. High bridge traffic is a significant performance bottleneck.
+
+```js
+// Measure bridge traffic:
+// Systrace → look for JS→UI bridge calls
+// Chrome DevTools → check frequency of native module calls
+
+// Strategy 1: Batch multiple native calls
+// ❌ Three bridge crossings
+AsyncStorage.setItem('key1', value1);
+AsyncStorage.setItem('key2', value2);
+AsyncStorage.setItem('key3', value3);
+
+// ✅ One bridge crossing
+AsyncStorage.multiSet([['key1', value1], ['key2', value2], ['key3', value3]]);
+
+// Strategy 2: useNativeDriver for animations (zero bridge per frame)
+Animated.timing(value, { toValue: 1, useNativeDriver: true }).start();
+
+// Strategy 3: Send large data in one call
+// ❌ Multiple small bridge calls
+employees.forEach(emp => {
+  NativeModule.addEmployee(emp);
+});
+
+// ✅ One call with array
+NativeModule.addEmployees(employees);
+
+// Strategy 4: Debounce/throttle native calls
+const debouncedUpdateNative = useMemo(
+  () => debounce((value) => NativeModule.updateValue(value), 100),
+  []
+);
+
+// Strategy 5: Move computation to native (new arch: TurboModules do this synchronously)
+// Instead of: JS fetches data → processes → sends to native
+// Do: native fetches data → processes → sends result to JS once
+
+// Strategy 6: Use JSI (New Architecture) — eliminates bridge entirely
+// TurboModules: synchronous JS↔Native calls
+// Fabric: React component tree rendered directly in C++
+```
+
+---
+
+### Q265. What is the New Architecture and how does it improve performance?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Very High | **Category:** Architecture
+
+**Answer:**
+```
+Old Architecture:
+React → Serialise to JSON → Async Bridge → Deserialise → Native
+
+New Architecture (3 main pillars):
+1. JSI (JavaScript Interface) — C++ layer, JS calls native synchronously
+2. TurboModules — native modules loaded lazily, called via JSI
+3. Fabric — new rendering system, tree diffing in C++ (not JS)
+```
+
+```js
+// Enabling New Architecture
+// android/gradle.properties
+newArchEnabled=true
+
+// ios/Podfile
+ENV['RCT_NEW_ARCH_ENABLED'] = '1'
+
+// What changes for developers:
+
+// 1. TurboModules — no more bridge, synchronous or async
+// Old: NativeModules.SomeModule.someMethod(callback)
+// New: SomeModule.someMethod() — direct JSI call
+
+// 2. Fabric — concurrent rendering support
+// ✅ Suspense, startTransition, useDeferredValue work properly in RN
+// ✅ Priority-based rendering
+
+// 3. Codegen — TypeScript specs generate native type-safe interfaces
+// nativeSpec.ts → generates Swift/Kotlin bindings at build time
+
+// 4. React Native Web compatibility improves
+// Fabric shares rendering infrastructure with React DOM
+
+// Migration considerations:
+// - Some third-party libs not yet compatible with New Arch
+// - Must enable or disable per package: fabric: true/false in pod
+// - gradual migration possible (interop layer available)
+
+// Check if New Arch is active
+import { TurboModuleRegistry } from 'react-native';
+const isNewArch = TurboModuleRegistry.getEnforcing !== undefined;
+```
+
+---
+
+### Q266. How do you optimise navigation performance between screens?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Navigation Performance
+
+**Answer:**
+```js
+// Problem: Heavy screens cause janky navigation transitions
+
+// 1. Defer data loading until after transition (InteractionManager)
+const ScreenB = () => {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => setReady(true));
+    return () => task.cancel();
+  }, []);
+
+  if (!ready) return <SkeletonScreen />;
+  return <HeavyContent />;
+};
+
+// 2. Use Native Stack (hardware-accelerated transitions)
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+// NativeStack uses native UIViewController/Fragment transitions
+// vs Stack which animates in JS
+
+// 3. Prevent heavy screens from re-rendering on focus
+// Navigation.setOptions forces a re-render — move to useFocusEffect
+useFocusEffect(
+  useCallback(() => {
+    loadUpdatedData(); // only on focus, not on every navigation state change
+  }, [])
+);
+
+// 4. Lazy-load tab screens
+<Tab.Navigator
+  screenOptions={{ lazy: true }} // don't render until first visit
+>
+
+// 5. Pre-load likely-next screen data
+// When user is on Product List, pre-fetch the first product detail
+const prefetchProductDetail = useCallback(async (productId) => {
+  await queryClient.prefetchQuery(['product', productId], fetchProduct);
+}, []);
+
+// 6. Minimise transition listener overhead
+// Don't add listeners in every screen — use navigation state at root
+```
+
+---
+
+### Q267. What is `useCallback` and when does it NOT help?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Performance
+
+**Answer:**
+```js
+// useCallback memoises a function reference across renders
+// ONLY helps when passing the function to a memoised child or as a dependency
+
+// ✅ useCallback HELPS here — passed to React.memo child
+const handlePress = useCallback((id) => {
+  navigation.navigate('Detail', { id });
+}, [navigation]);
+
+// MemoChild only re-renders if handlePress reference changes
+<MemoChild onPress={handlePress} />
+
+// ❌ useCallback DOESN'T HELP here — passed to native element
+const handleTextChange = useCallback((text) => {
+  setQuery(text);
+}, []); // no benefit — TextInput doesn't do reference equality
+
+<TextInput onChangeText={handleTextChange} /> // React never checks function ref on native elements
+
+// ❌ useCallback DOESN'T HELP — child is not memoised
+const handle = useCallback(() => doSomething(), []);
+<NonMemoChild onClick={handle} /> // always re-renders anyway
+
+// ❌ Premature optimisation — cheap components
+const handlePress = useCallback(() => setCount(c => c + 1), []);
+// Counter costs: closure allocation + comparison work
+// vs Benefit: prevents re-render of simple Text component
+// NOT worth it
+
+// When useCallback IS worth it:
+// 1. Function passed to React.memo child
+// 2. Function used as dependency in useEffect
+// 3. Function passed to FlatList renderItem or keyExtractor
+// 4. Function passed to useCallback or useMemo dependencies
+
+// Checking if useCallback helped:
+// Before: ChildComponent.whyDidYouRender = true → logs "function changed"
+// After: no log → reference is stable
+```
+
+---
+
+### Q268. How do you profile native module calls?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Profiling
+
+**Answer:**
+```js
+// Method 1: Systrace (Android profiler)
+// 1. Enable in dev menu → Start Systrace
+// 2. Perform the action
+// 3. Stop → open trace in chrome://tracing
+// Look for: callNativeModule events, their duration and frequency
+
+// Method 2: Custom timing wrapper
+const profiledModule = new Proxy(NativeModule, {
+  get: (target, methodName) => {
+    const original = target[methodName];
+    if (typeof original !== 'function') return original;
+    return (...args) => {
+      const start = Date.now();
+      const result = original.apply(target, args);
+      if (result && typeof result.then === 'function') {
+        return result.then(res => {
+          console.log(`[Native] ${methodName}: ${Date.now() - start}ms`);
+          return res;
+        });
+      }
+      console.log(`[Native] ${methodName}: ${Date.now() - start}ms`);
+      return result;
+    };
+  }
+});
+
+// Method 3: Flipper → Network Plugin
+// Shows all native HTTP calls, their timing
+// Shows AsyncStorage operations in the Storage plugin
+
+// Method 4: Android Studio Profiler
+// Connect physical Android device
+// Android Studio → Profile → CPU → Record method trace
+// Shows: each native method call, thread, duration
+
+// Method 5: Xcode Instruments
+// Instruments → Time Profiler
+// Filter by thread name "com.yourapp.RCTModuleThread"
+// Shows: native method call tree
+
+// Key metrics to monitor:
+// - AsyncStorage reads > 10ms = consider MMKV
+// - Network calls > 200ms = add loading state
+// - Native module calls > 16ms = optimise or move to TurboModule
+```
+
+---
+
+### Q269. How does React Native's garbage collection work and affect performance?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Low | **Category:** Memory + JS Engine
+
+**Answer:**
+```js
+// Hermes GC (default in RN 0.70+):
+// Uses a generational garbage collector
+// - Young generation: short-lived objects (most JS objects)
+// - Old generation: long-lived objects (closures, large arrays)
+// GC runs automatically but can cause "GC pauses" — brief JS thread freezes
+
+// Signs of GC pressure:
+// - Occasional frame drops every few seconds
+// - Memory usage grows steadily then drops suddenly (sawtooth pattern)
+// - Chrome/Hermes profiler shows "Minor GC" / "Major GC" events
+
+// Reducing GC pressure:
+
+// 1. Avoid creating many short-lived objects in hot paths
+// ❌ Inside renderItem (called every frame during scroll)
+const renderItem = ({ item }) => {
+  const style = { fontSize: 16, color: '#333' }; // new object EVERY render
+  return <Text style={style}>{item.name}</Text>;
+};
+
+// ✅ Static styles
+const styles = StyleSheet.create({ text: { fontSize: 16, color: '#333' } });
+const renderItem = ({ item }) => <Text style={styles.text}>{item.name}</Text>;
+
+// 2. Avoid large array operations in render
+// ❌ Spreads create new arrays
+const allItems = [...list1, ...list2, ...list3]; // in component body
+
+// ✅ useMemo
+const allItems = useMemo(() => [...list1, ...list2, ...list3], [list1, list2, list3]);
+
+// 3. Object pooling for frequently created/destroyed objects
+const messagePool = [];
+const getMessageObject = () => messagePool.pop() || {};
+const releaseMessageObject = (msg) => {
+  Object.keys(msg).forEach(k => delete msg[k]); // clear
+  messagePool.push(msg); // return to pool
+};
+
+// 4. WeakMap/WeakRef for caches — allows GC to collect entries
+const cache = new WeakMap(); // entries collected when key is GC'd
+```
+
+---
+
+### Q270. How do you implement infinite scroll with optimal performance?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** FlatList + Performance
+
+**Answer:**
+```js
+const PAGE_SIZE = 20;
+
+const InfiniteScrollList = () => {
+  const [data, setData] = useState([]);
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const isLoadingRef = useRef(false); // prevent duplicate requests
+
+  const loadMore = useCallback(async () => {
+    if (isLoadingRef.current || !hasMore) return;
+    isLoadingRef.current = true;
+    setLoading(true);
+
+    try {
+      const newItems = await fetchEmployees({ page, limit: PAGE_SIZE });
+      setData(prev => [...prev, ...newItems]);
+      setPage(prev => prev + 1);
+      setHasMore(newItems.length === PAGE_SIZE);
+    } finally {
+      setLoading(false);
+      isLoadingRef.current = false;
+    }
+  }, [page, hasMore]);
+
+  useEffect(() => { loadMore(); }, []); // initial load
+
+  const renderItem = useCallback(({ item }) => (
+    <EmployeeRow employee={item} />
+  ), []);
+
+  const keyExtractor = useCallback((item) => item.id.toString(), []);
+
+  const ListFooter = useCallback(() => (
+    loading ? <ActivityIndicator style={{ padding: 16 }} /> :
+    !hasMore ? <Text style={styles.endText}>No more employees</Text> : null
+  ), [loading, hasMore]);
+
+  return (
+    <FlatList
+      data={data}
+      keyExtractor={keyExtractor}
+      renderItem={renderItem}
+      ListFooterComponent={ListFooter}
+
+      onEndReached={loadMore}
+      onEndReachedThreshold={0.5} // trigger when 50% from bottom
+
+      // Performance props
+      getItemLayout={(_, index) => ({ length: 72, offset: 72 * index, index })}
+      initialNumToRender={PAGE_SIZE}
+      maxToRenderPerBatch={10}
+      windowSize={7}
+      removeClippedSubviews={true}
+    />
+  );
+};
+```
+
+---
+
+### Q271. What is `onEndReachedThreshold` and how do you tune it?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** FlatList
+
+**Answer:**
+`onEndReachedThreshold` controls how far from the bottom of the list (as a fraction of the visible length) `onEndReached` fires.
+
+```js
+// 0.5 = trigger when 50% of visible list remains below the current position
+// 0.1 = trigger when 10% remains (very close to bottom)
+// 2   = trigger 2x viewport before end (pre-fetch aggressively)
+
+// For most apps: 0.5 is the sweet spot
+<FlatList
+  onEndReached={loadNextPage}
+  onEndReachedThreshold={0.5}
+/>
+
+// Problem: onEndReached fires multiple times
+// This is a known FlatList bug — guard with isLoading ref
+const onEndReached = useCallback(() => {
+  if (!isLoadingRef.current && hasMore) {
+    loadNextPage();
+  }
+}, [hasMore]);
+
+// Network latency tuning:
+// Fast API (< 200ms): threshold 0.3 — start loading close to end
+// Slow API (> 500ms): threshold 1.0 or 2.0 — start loading early
+
+// For grids (numColumns > 1):
+// Threshold behaves the same way but items-per-row means you need fewer rows
+<FlatList
+  numColumns={3}
+  onEndReachedThreshold={0.5} // still 50% of visible area
+  onEndReached={loadMore}
+/>
+```
+
+---
+
+### Q272. How do you handle performance on older Android devices (low-end)?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Performance + Android
+
+**Answer:**
+```js
+// Target: devices with 1-2GB RAM, Android 5-8, older CPUs
+// These are common in India (your target market for 10-12 LPA jobs)
+
+// 1. Detect low-end device and adjust behaviour
+import { Platform } from 'react-native';
+import DeviceInfo from 'react-native-device-info';
+
+const [isLowEnd, setIsLowEnd] = useState(false);
+useEffect(() => {
+  DeviceInfo.getTotalMemory().then(bytes => {
+    setIsLowEnd(bytes < 2 * 1024 * 1024 * 1024); // < 2GB
+  });
+}, []);
+
+// 2. Reduce animation complexity on low-end
+const animationDuration = isLowEnd ? 0 : 300;
+const useAnimations = !isLowEnd;
+
+// 3. Smaller windowSize for FlatList
+<FlatList windowSize={isLowEnd ? 3 : 7} />
+
+// 4. Lower image quality
+const imageQuality = isLowEnd ? 50 : 80;
+const imageUrl = `https://cdn.example.com/image.jpg?q=${imageQuality}`;
+
+// 5. Disable heavy effects
+{!isLowEnd && <BlurView />}
+
+// 6. Reduce bundle size
+// Hermes helps significantly — smaller bytecode, better GC
+// Remove polyfills not needed for modern Android (API 21+)
+
+// 7. Avoid large inline styles in FlatList (StyleSheet.create)
+
+// 8. Throttle expensive operations more aggressively
+const throttleMs = isLowEnd ? 500 : 200;
+const debouncedSearch = useMemo(() => debounce(search, throttleMs), [throttleMs]);
+
+// 9. Use MMKV instead of AsyncStorage
+// MMKV: synchronous, C++ backed, ~10x faster than AsyncStorage
+import { MMKV } from 'react-native-mmkv';
+const storage = new MMKV();
+storage.set('key', 'value');
+const value = storage.getString('key'); // synchronous!
+```
+
+---
+
+### Q273. What is `react-native-mmkv` and why is it faster than `AsyncStorage`?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Storage + Performance
+
+**Answer:**
+MMKV (Mobile Mapped Key-Value) is a C++ key-value storage library developed by WeChat. It's 10-100x faster than AsyncStorage.
+
+| | AsyncStorage | MMKV |
+|--|-------------|------|
+| Implementation | JS + Native (slow) | C++ with mmap |
+| Read API | Async (Promise) | Synchronous |
+| Write API | Async (Promise) | Synchronous |
+| Encryption | No built-in | AES-256 |
+| Multi-process | No | Yes |
+| Typical read speed | 5-20ms | 0.01-0.1ms |
+
+```js
+import { MMKV } from 'react-native-mmkv';
+
+// Default storage
+const storage = new MMKV();
+
+// With encryption
+const encryptedStorage = new MMKV({ id: 'secure', encryptionKey: 'my-secret-key' });
+
+// Read/write (synchronous — no await needed!)
+storage.set('userId', '12345');
+storage.set('theme', 'dark');
+storage.set('count', 42);
+storage.set('preferences', JSON.stringify({ fontSize: 16, language: 'en' }));
+
+const userId = storage.getString('userId');    // '12345'
+const theme = storage.getString('theme');      // 'dark'
+const count = storage.getNumber('count');      // 42
+const prefs = JSON.parse(storage.getString('preferences') ?? '{}');
+
+// Delete
+storage.delete('userId');
+storage.clearAll();
+
+// Check existence
+const hasKey = storage.contains('theme');
+
+// Integrate with React state
+const useMMKVString = (key, defaultValue = '') => {
+  const [value, setValue] = useState(() => storage.getString(key) ?? defaultValue);
+
+  const setStoredValue = useCallback((newValue) => {
+    setValue(newValue);
+    storage.set(key, newValue);
+  }, [key]);
+
+  return [value, setStoredValue];
+};
+
+// Use Zustand with MMKV persistence
+import { persist, createJSONStorage } from 'zustand/middleware';
+
+const useStore = create(persist(
+  (set) => ({ theme: 'light', setTheme: (t) => set({ theme: t }) }),
+  { name: 'app-storage', storage: createJSONStorage(() => storage) }
+));
+```
+
+---
+
+### Q274. How do you detect and fix slow renders with `React Profiler`?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Profiling
+
+**Answer:**
+```js
+import { Profiler } from 'react';
+
+// Wrap suspicious component trees
+<Profiler
+  id="EmployeeDashboard"
+  onRender={(
+    id,           // component tree identifier
+    phase,        // 'mount' or 'update'
+    actualDuration, // ms this render took
+    baseDuration,   // estimated time without memoisation
+    startTime,      // when React started rendering
+    commitTime,     // when React committed the render
+  ) => {
+    // Log slow renders
+    if (actualDuration > 16) {
+      console.warn(`SLOW RENDER [${id}] phase=${phase}: ${actualDuration.toFixed(1)}ms`);
+    }
+
+    // Track in analytics
+    if (!__DEV__) {
+      analytics.track('slow_render', { screen: id, duration: actualDuration });
+    }
+  }}
+>
+  <EmployeeDashboard />
+</Profiler>
+
+// Analyse baseDuration vs actualDuration:
+// actualDuration << baseDuration → memoisation is working well
+// actualDuration ≈ baseDuration → memoisation not helping
+// actualDuration > 16ms → need to optimise
+
+// Find the slow component in the Profiler output:
+// 1. Record a session in React DevTools Profiler
+// 2. Click the slowest commit (red bar in timeline)
+// 3. Flamegraph → hover bars to see render time per component
+// 4. Ranked chart → sorted by self time — top = slowest
+
+// After fixing:
+// Re-run profiler → baseDuration should drop
+// If actualDuration drops but baseDuration stays same → memo helped
+// If baseDuration drops → you made the render itself cheaper
+```
+
+---
+
+### Q275. What is the `Performance` API in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Low | **Category:** Profiling
+
+**Answer:**
+React Native (Hermes) supports a subset of the Web Performance API for precise timing measurements.
+
+```js
+// performance.now() — high-resolution timestamp (fractional ms)
+const start = performance.now();
+expensiveOperation();
+const duration = performance.now() - start;
+console.log(`Operation took: ${duration.toFixed(3)}ms`);
+
+// performance.mark() — named timestamp
+performance.mark('dataFetchStart');
+const data = await fetchDashboardData();
+performance.mark('dataFetchEnd');
+
+// performance.measure() — duration between two marks
+performance.measure('dataFetch', 'dataFetchStart', 'dataFetchEnd');
+const [measure] = performance.getEntriesByName('dataFetch');
+console.log(`Data fetch: ${measure.duration.toFixed(1)}ms`);
+
+// performance.getEntries() — all recorded entries
+const entries = performance.getEntries();
+entries.forEach(entry => {
+  console.log(`${entry.name}: ${entry.duration?.toFixed(1)}ms`);
+});
+
+// Clear entries
+performance.clearMarks();
+performance.clearMeasures();
+
+// Custom performance monitoring utility
+const perfMonitor = {
+  marks: {},
+  start: (label) => { perfMonitor.marks[label] = performance.now(); },
+  end: (label) => {
+    const duration = performance.now() - (perfMonitor.marks[label] || 0);
+    delete perfMonitor.marks[label];
+    if (__DEV__) console.log(`⏱ ${label}: ${duration.toFixed(1)}ms`);
+    return duration;
+  },
+};
+
+perfMonitor.start('screenLoad');
+await loadScreenData();
+perfMonitor.end('screenLoad'); // ⏱ screenLoad: 342.1ms
+```
+
+---
+
+### Q276. How do you lazy-load images in a FlatList?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Images + Performance
+
+**Answer:**
+```js
+// FlatList already virtualises rendering — images outside the window
+// are unmounted, cancelling any pending loads.
+// Additional optimisations:
+
+// 1. FastImage with priority
+import FastImage from 'react-native-fast-image';
+
+const EmployeeAvatar = React.memo(({ uri, size }) => (
+  <FastImage
+    source={{
+      uri,
+      priority: FastImage.priority.normal,
+      cache: FastImage.cacheControl.immutable,
+    }}
+    style={{ width: size, height: size, borderRadius: size / 2 }}
+    resizeMode={FastImage.resizeMode.cover}
+  />
+));
+
+// 2. Progressive loading with blur placeholder
+const ProgressiveImage = React.memo(({ uri, thumbUri, style }) => {
+  const [fullLoaded, setFullLoaded] = useState(false);
+
+  return (
+    <View style={style}>
+      {/* Low-res thumbnail loads first */}
+      <FastImage
+        source={{ uri: thumbUri }}
+        style={[StyleSheet.absoluteFillObject, { opacity: fullLoaded ? 0 : 1 }]}
+        blurRadius={2}
+      />
+      {/* Full image fades in */}
+      <FastImage
+        source={{ uri }}
+        style={[StyleSheet.absoluteFillObject, { opacity: fullLoaded ? 1 : 0 }]}
+        onLoad={() => setFullLoaded(true)}
+      />
+    </View>
+  );
+});
+
+// 3. Preload next page images
+const preloadNextPage = (items) => {
+  FastImage.preload(items.map(item => ({
+    uri: item.avatarUrl,
+    priority: FastImage.priority.low,
+  })));
+};
+
+// 4. FlatList viewability callback — preload when item enters viewport
+const onViewableItemsChanged = useCallback(({ viewableItems }) => {
+  const nextItems = getNextItems(viewableItems);
+  FastImage.preload(nextItems.map(i => ({ uri: i.item.avatarUrl })));
+}, []);
+
+<FlatList
+  onViewableItemsChanged={onViewableItemsChanged}
+  viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
+/>
+```
+
+---
+
+### Q277. What is `shouldRasterizeIOS` and `renderToHardwareTextureAndroid`?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Low | **Category:** Rendering Performance
+
+**Answer:**
+Both offload component rendering to the GPU as a texture — the layer is rendered once and composited, avoiding re-rendering on every frame. Use for static complex components inside scroll views or animations.
+
+```js
+// shouldRasterizeIOS — iOS: rasterize to a composited layer
+<View
+  shouldRasterizeIOS={true}       // iOS only
+  style={styles.complexCard}
+>
+  <ComplexCardContent />           {/* rendered once to texture */}
+</View>
+
+// renderToHardwareTextureAndroid — Android: render to GPU texture
+<View
+  renderToHardwareTextureAndroid={true}  // Android only
+  style={styles.complexCard}
+>
+  <ComplexCardContent />
+</View>
+
+// Cross-platform wrapper
+const GPU_LAYER_PROPS = Platform.select({
+  ios: { shouldRasterizeIOS: true },
+  android: { renderToHardwareTextureAndroid: true },
+});
+
+<View {...GPU_LAYER_PROPS} style={styles.card}>
+  <ComplexContent />
+</View>
+
+// When to use:
+// ✅ Complex static UI inside a scrolling list (shadows, gradients, many children)
+// ✅ Animating a view that doesn't change its contents (move/scale/opacity only)
+// ✅ Bottom tabs, headers that animate but don't redraw
+
+// When NOT to use:
+// ❌ Content that changes frequently — GPU texture must be regenerated each time
+// ❌ Views with changing text — re-rasterisation is expensive
+// ❌ Simple views (overhead > benefit)
+
+// Note: consumes GPU memory for the texture
+// Too many rasterised layers → GPU memory pressure → slower
+```
+
+---
+
+### Q278. How do you implement background task performance optimisation?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Background + Performance
+
+**Answer:**
+```js
+// Background tasks in React Native have strict time limits
+// iOS: ~30 seconds of background execution via BackgroundFetch
+// Android: WorkManager for deferred tasks
+
+// 1. react-native-background-fetch (cross-platform)
+import BackgroundFetch from 'react-native-background-fetch';
+
+BackgroundFetch.configure({
+  minimumFetchInterval: 15,  // minutes (minimum 15 on iOS)
+  stopOnTerminate: false,
+  startOnBoot: true,
+  enableHeadless: true,
+}, async (taskId) => {
+  // Perform quick, essential work only
+  await syncAttendanceData();
+  BackgroundFetch.finish(taskId); // MUST call within time limit
+}, (taskId) => {
+  console.log('[BackgroundFetch] TIMEOUT:', taskId);
+  BackgroundFetch.finish(taskId);
+});
+
+// 2. Prioritise background work
+const syncInBackground = async () => {
+  // Order by priority:
+  await syncCriticalData();    // attendance, payroll = high priority
+  if (backgroundTimeLeft() > 5000) {
+    await syncSecondaryData(); // reports, analytics = lower priority
+  }
+};
+
+// 3. Incremental sync — don't sync everything, only changed data
+const lastSyncTime = await MMKV.getNumber('lastSync') ?? 0;
+const changedData = await api.getChangedSince(lastSyncTime);
+await db.upsertAll(changedData);
+await MMKV.set('lastSync', Date.now());
+
+// 4. react-native-background-actions for long-running background service (Android)
+import BackgroundService from 'react-native-background-actions';
+
+const uploadTask = async (taskData) => {
+  const { files } = taskData;
+  for (let i = 0; i < files.length; i++) {
+    await uploadFile(files[i]);
+    await BackgroundService.updateNotification({
+      taskDesc: `Uploading ${i+1}/${files.length}`,
+      progressBar: { max: files.length, value: i + 1 },
+    });
+  }
+};
+```
+
+---
+
+### Q279. How do you handle performance for real-time data (WebSocket updates)?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Real-time + Performance
+
+**Answer:**
+```js
+// Problem: Frequent WebSocket messages → many setState calls → many re-renders
+
+// Strategy 1: Throttle/batch state updates
+const pendingUpdates = useRef([]);
+const flushTimeout = useRef(null);
+
+const handleWebSocketMessage = useCallback((message) => {
+  pendingUpdates.current.push(message);
+
+  // Flush at most every 100ms (10fps for data updates)
+  if (!flushTimeout.current) {
+    flushTimeout.current = setTimeout(() => {
+      const updates = pendingUpdates.current;
+      pendingUpdates.current = [];
+      flushTimeout.current = null;
+
+      // Batch all updates into single state update
+      setMessages(prev => [...prev, ...updates]);
+    }, 100);
+  }
+}, []);
+
+// Strategy 2: Use a state manager that supports bulk updates
+// Zustand batches automatically
+const useStore = create((set) => ({
+  messages: [],
+  addMessages: (msgs) => set(state => ({ messages: [...state.messages, ...msgs] })),
+}));
+
+// Strategy 3: Normalised state — update by ID, not push to array
+// Prevents duplicates and makes updates O(1) instead of O(n) scan
+const handleUpdate = (update) => {
+  setEmployees(prev => ({
+    ...prev,
+    [update.id]: { ...prev[update.id], ...update.data },
+  }));
+};
+
+// Strategy 4: Virtualised list handles new items gracefully
+// Adding to head with prepend strategy
+const [data, setData] = useState([]);
+const handleNewMessage = useCallback((msg) => {
+  setData(prev => [msg, ...prev.slice(0, MAX_MESSAGES)]); // cap at MAX_MESSAGES
+}, []);
+
+// Strategy 5: Memoize expensive derivations
+const unreadCount = useMemo(
+  () => messages.filter(m => !m.read).length,
+  [messages]
+);
+```
+
+---
+
+### Q280. What is the `initialNumToRender` prop and how do you choose it?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** FlatList
+
+**Answer:**
+`initialNumToRender` is the number of items rendered **synchronously** in the first render. These are displayed immediately without any async batch work.
+
+```js
+// Rule of thumb: set to slightly more than what fills the screen
+// If each item is 72px and screen is 800px: 800/72 ≈ 11 → use 12-15
+
+<FlatList
+  initialNumToRender={12}    // renders 12 items synchronously
+  data={employees}
+  renderItem={renderItem}
+/>
+
+// Too LOW (e.g., 1):
+// - First render shows only 1 item (blank space below)
+// - Items "pop in" asynchronously — bad UX
+// - Good for: TTI improvement when list is below the fold
+
+// Too HIGH (e.g., 100):
+// - First render is slow (100 items × render time)
+// - Worse TTI even though list looks full immediately
+// - Wastes time rendering items that won't be visible
+
+// Calibration:
+// Measure screen height: const { height } = useWindowDimensions()
+// Measure item height: getItemLayout or onLayout
+// Compute: Math.ceil(screenHeight / itemHeight) + 2 (buffer)
+
+const { height: screenHeight } = useWindowDimensions();
+const ITEM_HEIGHT = 72;
+const INITIAL_ITEMS = Math.ceil(screenHeight / ITEM_HEIGHT) + 2;
+
+<FlatList initialNumToRender={INITIAL_ITEMS} />
+
+// For screens where the list is NOT immediately visible (below header):
+// Can use smaller value since list won't be seen immediately
+// For screens where the list IS immediately visible:
+// Use exact screen-fill value or slightly more
+```
+
+---
+
+### Q281. How do you handle font loading performance?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Startup Performance
+
+**Answer:**
+```js
+// Problem: Custom fonts not loading before first render → FOUT (Flash of Unstyled Text)
+
+// Solution 1: expo-font (Expo)
+import * as Font from 'expo-font';
+import { useFonts } from 'expo-font';
+import AppLoading from 'expo-app-loading';
+
+const App = () => {
+  const [fontsLoaded] = useFonts({
+    'Inter-Regular': require('./assets/fonts/Inter-Regular.ttf'),
+    'Inter-Medium': require('./assets/fonts/Inter-Medium.ttf'),
+    'Inter-Bold': require('./assets/fonts/Inter-Bold.ttf'),
+  });
+
+  if (!fontsLoaded) return <AppLoading />; // show native splash until fonts load
+
+  return <AppContent />;
+};
+
+// Solution 2: react-native-vector-icons (CLI)
+// Fonts are linked natively via autolinking or Info.plist/build.gradle
+// Available immediately — no loading needed
+
+// Solution 3: System fonts (no loading, best performance)
+const fontFamily = Platform.select({
+  ios: 'SF Pro Display',     // system font on iOS
+  android: 'Roboto',         // system font on Android
+});
+// Zero loading time — fonts are built into the OS
+
+// Font loading performance tips:
+// 1. Subset fonts — only include characters you need
+//    fonttools + pyftsubset can reduce font size by 80%
+// 2. Preload at app start — block first render until fonts ready
+// 3. Use variable fonts — one file instead of 6 weights
+// 4. woff2 format for web, but RN uses .ttf — keep .ttf small
+```
+
+---
+
+### Q282. What is tree shaking and does it work in React Native?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Bundle Optimisation
+
+**Answer:**
+Tree shaking = static analysis to eliminate unused exports from a bundle. Webpack supports it for ES modules. Metro (RN's bundler) has **limited** tree shaking support.
+
+```js
+// Metro tree shaking limitations:
+// - Metro uses CommonJS (require/module.exports) internally
+// - CommonJS is not statically analysable → full modules included
+// - ES modules (import/export) can be tree-shaken by Metro in some cases
+
+// What DOES work in Metro:
+// Import specific named exports when library uses ES modules
+// ✅ lodash-es (ES module version)
+import { debounce, throttle } from 'lodash-es';
+// Only debounce and throttle included in bundle
+
+// ❌ Regular lodash (CommonJS)
+import { debounce } from 'lodash';
+// Entire lodash included (despite named import!)
+
+// Libraries that are tree-shakeable in Metro:
+// date-fns, lodash-es, @reduxjs/toolkit, zustand, react-query
+
+// Manual tree shaking strategies:
+// 1. Direct file imports
+import debounce from 'lodash/debounce'; // only debounce module
+import format from 'date-fns/format';   // only format module
+
+// 2. babel-plugin-import (automatic direct imports)
+// babel.config.js:
+plugins: [
+  ['import', { libraryName: 'lodash', libraryDirectory: '', camel2DashComponentName: false }]
+]
+// import { debounce } from 'lodash' → import debounce from 'lodash/debounce'
+
+// 3. Async imports for large optional features
+const loadPDFViewer = () => import('./PDFViewer'); // loaded on demand
+```
+
+---
+
+### Q283. How do you detect memory usage programmatically in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Low | **Category:** Memory Monitoring
+
+**Answer:**
+```js
+// Method 1: react-native-device-info
+import DeviceInfo from 'react-native-device-info';
+
+const checkMemory = async () => {
+  const totalMemory = await DeviceInfo.getTotalMemory();      // bytes
+  const usedMemory = await DeviceInfo.getUsedMemory();        // bytes (Android only)
+  const freeMemory = totalMemory - usedMemory;
+
+  console.log(`Total: ${(totalMemory / 1e9).toFixed(1)}GB`);
+  console.log(`Used: ${(usedMemory / 1e6).toFixed(0)}MB`);
+
+  // Alert if app using too much memory
+  if (usedMemory > 500 * 1e6) { // > 500MB
+    console.warn('High memory usage! Consider clearing caches.');
+  }
+};
+
+// Method 2: Performance memory (limited support)
+if (performance.memory) {
+  console.log('Heap size:', performance.memory.usedJSHeapSize / 1e6, 'MB');
+}
+
+// Method 3: Flipper Memory tab (development only)
+// Connect Flipper → Memory → Take heap snapshot
+// Allocations view shows live memory growth
+// Heap snapshot shows what's consuming memory
+
+// Method 4: Android Studio Memory Profiler
+// Profile → Memory → record allocations
+// Find largest retained objects
+
+// Method 5: Platform-specific native calls
+import { NativeModules } from 'react-native';
+const { MemoryModule } = NativeModules;
+// Requires custom native module to expose Android's ActivityManager
+
+// Proactive memory management:
+useEffect(() => {
+  // Clear image caches when app goes to background
+  const sub = AppState.addEventListener('change', (state) => {
+    if (state === 'background') {
+      FastImage.clearMemoryCache();
+      queryClient.clear(); // React Query cache
+    }
+  });
+  return () => sub.remove();
+}, []);
+```
+
+---
+
+### Q284. What is `keyExtractor` and why does a stable key matter for performance?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** FlatList Performance
+
+**Answer:**
+```js
+// keyExtractor tells React which rendered item corresponds to which data item
+// Used for reconciliation — React reuses components when data changes
+// Stable, unique keys = React reuses existing components (fast)
+// Unstable keys = React unmounts + remounts components (slow)
+
+// ✅ Stable unique key — React reuses components on sort/filter
+const keyExtractor = useCallback((item) => item.id.toString(), []);
+
+// ❌ Using index — unstable on sort/filter/insert
+const keyExtractor = (item, index) => index.toString();
+// If you insert an item at position 0:
+// All items after shift — new keys → all remounted!
+
+// ❌ Math.random() — always remounts everything
+const keyExtractor = () => Math.random().toString();
+
+// ✅ Composite key for items that might have duplicate IDs across types
+const keyExtractor = (item) => `${item.type}-${item.id}`;
+
+// ✅ For nested lists
+const keyExtractor = (item) => `section-${item.sectionId}-item-${item.id}`;
+
+// What happens with wrong keys:
+// 1. Re-renders all items (performance)
+// 2. Loses focused state (TextInput focus lost on filter)
+// 3. Loses scroll position
+// 4. Animations reset on every data change
+
+// FlatList logs a warning in dev if key is missing or not unique
+// Always see: "Each child in a list should have a unique 'key' prop"
+
+// keyExtractor vs key prop:
+// FlatList: use keyExtractor prop on FlatList component
+// Manual map: use key prop directly on the element
+{items.map(item => <Row key={item.id.toString()} item={item} />)}
+```
+
+---
+
+### Q285. How do you implement pagination with a cursor in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Pagination + Performance
+
+**Answer:**
+```js
+// Cursor-based pagination: more efficient than offset for large datasets
+// Uses a cursor (usually last item ID) instead of page number
+// Consistent results even when data is inserted/deleted
+
+const useCursorPagination = (fetcher) => {
+  const [items, setItems] = useState([]);
+  const [cursor, setCursor] = useState(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const isLoadingRef = useRef(false);
+
+  const loadMore = useCallback(async () => {
+    if (isLoadingRef.current || !hasMore) return;
+    isLoadingRef.current = true;
+    setLoading(true);
+
+    try {
+      // API: GET /employees?cursor=<lastId>&limit=20
+      const { data, nextCursor, hasMore: more } = await fetcher(cursor);
+
+      setItems(prev => {
+        // Deduplicate using Set of IDs
+        const existingIds = new Set(prev.map(i => i.id));
+        const newItems = data.filter(i => !existingIds.has(i.id));
+        return [...prev, ...newItems];
+      });
+      setCursor(nextCursor);
+      setHasMore(more);
+    } catch (err) {
+      console.error('Pagination error:', err);
+    } finally {
+      setLoading(false);
+      isLoadingRef.current = false;
+    }
+  }, [cursor, hasMore, fetcher]);
+
+  const refresh = useCallback(async () => {
+    setItems([]);
+    setCursor(null);
+    setHasMore(true);
+    isLoadingRef.current = false;
+    // loadMore will run on next call
+  }, []);
+
+  return { items, loadMore, loading, hasMore, refresh };
+};
+
+// Usage
+const { items, loadMore, loading, hasMore } = useCursorPagination(
+  (cursor) => fetchEmployees({ cursor, limit: 20 })
+);
+
+<FlatList
+  data={items}
+  renderItem={renderItem}
+  onEndReached={loadMore}
+  onEndReachedThreshold={0.5}
+  refreshing={loading && items.length === 0}
+  onRefresh={refresh}
+/>
+```
+
+---
+
+### Q286. How do you reduce the APK/IPA size in React Native?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Bundle + App Size
+
+**Answer:**
+```bash
+# Android APK size reduction:
+
+# 1. Enable app bundles (AAB) instead of APK (recommended for Play Store)
+# android/app/build.gradle
+android {
+  bundle { language { enableSplit = true } density { enableSplit = true } resources { enableSplit = true } }
+}
+# Play Store delivers only the APK for user's device config → smaller download
+
+# 2. Enable Proguard / R8 (minifies and obfuscates Java code)
+# android/app/build.gradle
+buildTypes {
+  release {
+    minifyEnabled true
+    shrinkResources true
+    proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+  }
+}
+
+# 3. Split APKs by ABI (removes code for other CPU architectures)
+android { splits { abi { enable true; reset(); include 'armeabi-v7a', 'arm64-v8a'; universalApk false } } }
+
+# 4. Hermes — bytecode smaller than JS source
+# (already enabled in RN 0.70+ by default)
+
+# iOS IPA size reduction:
+# 1. Enable bitcode (deprecated in Xcode 14 but still reduces size for older)
+# 2. App Thinning (App Store slicing) — automatic
+# 3. Strip debug symbols from release build (automatic with release config)
+```
+
+```js
+// JS bundle size reduction (both platforms):
+
+// 1. Remove unused icon sets
+// android/app/build.gradle / ios/Podfile
+// Only include fonts you use from react-native-vector-icons
+
+// 2. Optimize images
+// Use WebP instead of PNG/JPEG
+// Resize to actual display size before bundling
+
+// 3. Remove development-only packages from production
+// Check package.json: move dev tools to devDependencies
+// "react-native-flipper" should be devDependency
+
+// 4. Analyse what's in your bundle (Q243)
+// source-map-explorer to find large dependencies
+
+// 5. Lazy require large optional modules
+const getPDF = () => require('react-native-pdf'); // loaded on demand
+```
+
+---
+
+### Q287. How do you handle slow startup on Android specifically?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Android + Startup
+
+**Answer:**
+```java
+// Android cold start is typically slower than iOS due to JVM startup + Dalvik
+
+// 1. Application class — defer non-critical initialisation
+// android/app/src/main/java/com/yourapp/MainApplication.kt
+class MainApplication : Application(), ReactApplication {
+  override fun onCreate() {
+    super.onCreate()
+    // ✅ Only initialise what's needed for first screen
+    SoLoader.init(this, false)
+    // ❌ Don't do this here — defer it
+    // initHeavyLibrary() — move to after first render
+  }
+}
+```
+
+```js
+// 2. ReactNativeFlipper.initializeFlipper only in DEBUG
+// Already handled by default React Native template
+
+// 3. Preload React Native bridge in Application (for fastest launch)
+// android/app/src/main/.../MainActivity.kt
+// ReactActivityDelegate.fabricEnabled = true (for New Arch)
+
+// 4. Splash screen — native Android splash (not RN)
+// react-native-splash-screen or expo-splash-screen
+// Show IMMEDIATELY on app launch, before RN bridge initialises
+// activity_splash.xml → immediate display, no wait for React
+
+// 5. Application.onCreate profiling
+// TraceCompat.beginSection("YourApp.initLibrary")
+// initLibrary()
+// TraceCompat.endSection()
+// Then: adb shell am start-activity -W com.yourapp/...
+// View in Android Studio → Profiler
+
+// 6. Multi-dex (Android < 5.0 / large apps)
+// android/app/build.gradle
+// defaultConfig { multiDexEnabled true }
+// implementation 'androidx.multidex:multidex:2.0.1'
+// Prevents "64K reference limit" crash but slightly slower startup
+// Not needed for most apps targeting API 21+
+
+// 7. Baseline Profiles (Android 9+ / Google Play)
+// Pre-compiles hot code paths at install time
+// 20-40% startup improvement on first launch after install
+```
+
+---
+
+### Q288. What is `Fabric` (New Architecture renderer) and how does it improve performance?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Architecture
+
+**Answer:**
+Fabric is the new rendering system in React Native's New Architecture that replaces the old UIManager.
+
+**Old rendering (UIManager):**
+```
+React reconciler (JS) → Async Bridge → UIManager (native) → Native views
+    3 threads, async, serialised JSON
+```
+
+**Fabric rendering:**
+```
+React reconciler (JS) → JSI (synchronous) → C++ Shadow Tree → Native views
+    Shared C++ layer, synchronous, no serialisation
+```
+
+```js
+// Benefits of Fabric:
+
+// 1. Synchronous layout measurements
+// Old: measure() is async → callback-based
+// Fabric: measurements can be synchronous (same frame)
+
+// 2. Concurrent rendering support
+// React 18 concurrent features (Suspense, startTransition) work in Fabric
+// Old arch: not supported
+import { startTransition } from 'react';
+
+const handleSearch = (query) => {
+  startTransition(() => {
+    setSearchResults(filterEmployees(query)); // low-priority update
+  });
+  setSearchInput(query); // high-priority update (immediate)
+};
+
+// 3. Better error handling
+// Errors in Fabric are caught at render boundary (ErrorBoundary works better)
+
+// 4. Native components can be written in C++
+// Shared code between iOS and Android
+
+// 5. React Native Web interoperability
+// Fabric and React DOM share component model
+
+// Enable:
+// android/gradle.properties: newArchEnabled=true
+// ios/Podfile: ENV['RCT_NEW_ARCH_ENABLED'] = '1'
+```
+
+---
+
+### Q289. How do you implement pagination cache to avoid re-fetching?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Performance + Caching
+
+**Answer:**
+```js
+// React Query (TanStack Query) — best in class for server state caching
+import { useInfiniteQuery } from '@tanstack/react-query';
+
+const useEmployees = () => {
+  return useInfiniteQuery({
+    queryKey: ['employees'],
+    queryFn: ({ pageParam = null }) =>
+      fetchEmployees({ cursor: pageParam, limit: 20 }),
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    staleTime: 5 * 60 * 1000,      // data considered fresh for 5 minutes
+    cacheTime: 10 * 60 * 1000,     // keep in cache for 10 minutes
+    refetchOnWindowFocus: false,   // don't refetch on app foreground (use staleTime)
+    refetchOnMount: false,         // use cached data on re-mount if fresh
+  });
+};
+
+const EmployeeList = () => {
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = useEmployees();
+
+  const flatData = useMemo(
+    () => data?.pages.flatMap(page => page.employees) ?? [],
+    [data]
+  );
+
+  return (
+    <FlatList
+      data={flatData}
+      renderItem={renderItem}
+      keyExtractor={keyExtractor}
+      onEndReached={() => hasNextPage && fetchNextPage()}
+      onEndReachedThreshold={0.5}
+      ListFooterComponent={isFetchingNextPage ? <ActivityIndicator /> : null}
+    />
+  );
+};
+
+// Manual caching with MMKV
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+const getCachedEmployees = async (cursor) => {
+  const cacheKey = `employees-${cursor ?? 'start'}`;
+  const cached = storage.getString(cacheKey);
+
+  if (cached) {
+    const { data, timestamp } = JSON.parse(cached);
+    if (Date.now() - timestamp < CACHE_TTL) return data; // fresh
+  }
+
+  const fresh = await fetchEmployees({ cursor });
+  storage.set(cacheKey, JSON.stringify({ data: fresh, timestamp: Date.now() }));
+  return fresh;
+};
+```
+
+---
+
+### Q290. How do you set up a performance monitoring dashboard for a production React Native app?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Monitoring + Production
+
+**Answer:**
+```js
+// Production performance monitoring stack:
+
+// 1. Crash reporting + performance: Sentry
+import * as Sentry from '@sentry/react-native';
+
+Sentry.init({
+  dsn: 'https://your-dsn@sentry.io/project-id',
+  tracesSampleRate: 0.2,        // 20% of sessions get performance traces
+  enableAutoSessionTracking: true,
+  sessionTrackingIntervalMillis: 30000,
+});
+
+// Track custom performance transactions
+const transaction = Sentry.startTransaction({ name: 'loadDashboard' });
+await loadDashboardData();
+transaction.finish();
+
+// Sentry automatically captures:
+// - JS exceptions + native crashes
+// - Slow renders (> 16ms)
+// - Network requests + timing
+// - App startup time
+
+// 2. Firebase Performance Monitoring
+import perf from '@react-native-firebase/perf';
+
+const httpMetric = perf().newHttpMetric('https://api.yourapp.com/employees', 'GET');
+await httpMetric.start();
+const data = await fetchEmployees();
+httpMetric.httpResponseCode = 200;
+await httpMetric.stop();
+
+// Custom trace
+const trace = await perf().startTrace('process_payroll');
+processPayroll(data);
+await trace.stop();
+
+// 3. Custom analytics events
+const trackPerformance = (event, data) => {
+  analytics.logEvent('performance', {
+    event_name: event,
+    screen: currentScreen,
+    ...data,
+  });
+};
+
+// Track in critical paths:
+const loadStart = performance.now();
+await loadScreen();
+trackPerformance('screen_load', {
+  screen: 'EmployeeList',
+  duration: performance.now() - loadStart,
+  employee_count: employees.length,
+});
+
+// 4. Alerting thresholds
+// Sentry: alert if p95 screen load > 3s
+// Firebase: alert if crash-free sessions < 99.5%
+// Custom: alert if API error rate > 1%
+```
+
+---
+
+## Sections Overview (Q291–Q500)
+
+| Section | Questions | Topics |
+|---------|-----------|--------|
+| Native Modules | Q291–Q340 | Writing custom native modules (iOS + Android) |
+| Expo vs CLI | Q341–Q370 | Managed vs bare, EAS Build, Expo Go |
+| Testing | Q371–Q420 | Unit, integration, e2e (Detox), mocking |
+| Debugging | Q421–Q450 | Flipper, Hermes debugger, crash reporting |
+| Storage & Permissions | Q451–Q480 | AsyncStorage, Keychain, permission flows |
+| Miscellaneous | Q481–Q500 | Accessibility, internationalisation, misc APIs |
+
+---
+
+> 💡 **Tip for GitHub:** Add a `## Table of Contents` section at the top with anchor links to each question for easy navigation.
+
+---
+
+*Part 01 of 8 — [← Back to Part README](./README.md) · [← Main README](../README.md)*
