@@ -24434,6 +24434,20 @@ const debugConfig = {
 
 ---
 
+## Sections Overview (Q451–Q500)
+
+| Section | Questions | Topics |
+|---------|-----------|--------|
+| Storage & Permissions | Q451–Q480 | AsyncStorage, Keychain, permission flows |
+| Miscellaneous | Q481–Q500 | Accessibility, internationalisation, misc APIs |
+
+---
+
+> 💡 **Tip for GitHub:** Add a `## Table of Contents` section at the top with anchor links to each question for easy navigation.
+
+---
+
+*Part 01 of 8 — [← Back to Part README](./README.md) · [← Main README](../README.md)*
 
 ## Section 12: Storage & Permissions (Q451–Q480)
 
@@ -25199,14 +25213,4004 @@ const requestPermission = async (permission) => {
         case RESULTS.DENIED:
             // Not asked yet or previously denied (can ask again)
             const result = await request(permission);
-            return result === RESULTS.GRANTED ? '
+            return result === RESULTS.GRANTED ? 'granted' : 'denied';
 
+        case RESULTS.BLOCKED:
+            // User selected "Don't ask again" or denied in Settings
+            // CANNOT request again — must send to Settings
+            Alert.alert(
+                'Permission Required',
+                'This feature requires camera access. Please enable it in Settings.',
+                [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Open Settings', onPress: openSettings },
+                ]
+            );
+            return 'blocked';
 
-## Sections Overview (Q460–Q500)
+        case RESULTS.LIMITED:
+            // iOS 14+ Photos: limited access (user selected some photos)
+            // Can work with limited, but offer to expand
+            Alert.alert(
+                'Limited Access',
+                'You have limited photo access. Select more photos to see your full library.',
+                [
+                    { text: 'Use Limited Access' },
+                    { text: 'Expand Access', onPress: openSettings },
+                ]
+            );
+            return 'limited';
+
+        case RESULTS.UNAVAILABLE:
+            // Feature not available on this device (e.g., no camera)
+            Alert.alert('Not Available', 'This feature is not supported on your device.');
+            return 'unavailable';
+
+        default:
+            return 'unknown';
+    }
+};
+
+// Usage
+const enableCamera = async () => {
+    const permission = Platform.select({
+        ios: PERMISSIONS.IOS.CAMERA,
+        android: PERMISSIONS.ANDROID.CAMERA,
+    });
+
+    const result = await requestPermission(permission);
+    if (result === 'granted') {
+        openCamera();
+    }
+};
+```
+
+---
+
+### Q461. How do you use `react-native-permissions` for cross-platform permission handling?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Permissions
+
+**Answer:**
+```bash
+npm install react-native-permissions
+cd ios && pod install
+
+# iOS — add permission descriptions to Info.plist (or app.json for Expo)
+# Android — add to AndroidManifest.xml
+```
+
+```js
+import { check, request, requestMultiple, checkMultiple,
+         PERMISSIONS, RESULTS, openSettings } from 'react-native-permissions';
+
+// Available permissions (cross-platform naming):
+// PERMISSIONS.IOS.CAMERA
+// PERMISSIONS.IOS.PHOTO_LIBRARY
+// PERMISSIONS.IOS.LOCATION_WHEN_IN_USE
+// PERMISSIONS.IOS.LOCATION_ALWAYS
+// PERMISSIONS.IOS.NOTIFICATIONS
+// PERMISSIONS.IOS.FACE_ID
+// PERMISSIONS.IOS.MICROPHONE
+
+// PERMISSIONS.ANDROID.CAMERA
+// PERMISSIONS.ANDROID.READ_EXTERNAL_STORAGE (< Android 13)
+// PERMISSIONS.ANDROID.READ_MEDIA_IMAGES (Android 13+)
+// PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION
+// PERMISSIONS.ANDROID.ACCESS_BACKGROUND_LOCATION
+// PERMISSIONS.ANDROID.RECORD_AUDIO
+// PERMISSIONS.ANDROID.POST_NOTIFICATIONS (Android 13+)
+
+// Cross-platform permission constant
+const CAMERA_PERMISSION = Platform.select({
+    ios: PERMISSIONS.IOS.CAMERA,
+    android: PERMISSIONS.ANDROID.CAMERA,
+})!;
+
+// Check multiple permissions at once
+const checkAllPermissions = async () => {
+    const statuses = await checkMultiple([
+        CAMERA_PERMISSION,
+        Platform.OS === 'ios' ? PERMISSIONS.IOS.MICROPHONE : PERMISSIONS.ANDROID.RECORD_AUDIO,
+    ]);
+
+    const cameraGranted = statuses[CAMERA_PERMISSION] === RESULTS.GRANTED;
+    const micGranted = statuses[/* microphone */] === RESULTS.GRANTED;
+
+    return { cameraGranted, micGranted };
+};
+
+// Request multiple at once (iOS asks together, Android one by one)
+const requestMultiplePermissions = async () => {
+    const statuses = await requestMultiple([
+        PERMISSIONS.IOS.CAMERA,
+        PERMISSIONS.IOS.MICROPHONE,
+        PERMISSIONS.IOS.PHOTO_LIBRARY,
+    ]);
+    return statuses;
+};
+
+// Permission result constants:
+// RESULTS.UNAVAILABLE — feature not available on this device
+// RESULTS.DENIED      — permission not asked or denied (can request again)
+// RESULTS.LIMITED     — iOS 14+ partial photo access
+// RESULTS.GRANTED     — permission granted
+// RESULTS.BLOCKED     — denied permanently (needs Settings redirect)
+```
+
+---
+
+### Q462. How do you handle location permissions correctly?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Location Permissions
+
+**Answer:**
+```js
+import { check, request, PERMISSIONS, RESULTS, openSettings } from 'react-native-permissions';
+import Geolocation from '@react-native-community/geolocation';
+
+// Location permission has multiple levels:
+// iOS: whenInUse → always (two separate permissions)
+// Android: fine (GPS) | coarse (network) | background (Android 10+)
+
+const requestLocationPermission = async (background = false) => {
+    if (Platform.OS === 'ios') {
+        // Step 1: Request "when in use" first
+        const whenInUseStatus = await check(PERMISSIONS.IOS.LOCATION_WHEN_IN_USE);
+
+        if (whenInUseStatus === RESULTS.DENIED) {
+            const result = await request(PERMISSIONS.IOS.LOCATION_WHEN_IN_USE);
+            if (result !== RESULTS.GRANTED) return result;
+        } else if (whenInUseStatus === RESULTS.BLOCKED) {
+            openSettings();
+            return 'blocked';
+        }
+
+        if (!background) return 'granted';
+
+        // Step 2: Upgrade to "always" (only ask if when-in-use is granted)
+        const alwaysStatus = await check(PERMISSIONS.IOS.LOCATION_ALWAYS);
+        if (alwaysStatus === RESULTS.DENIED) {
+            return await request(PERMISSIONS.IOS.LOCATION_ALWAYS);
+        }
+        return alwaysStatus;
+
+    } else {
+        // Android
+        const fineStatus = await request(PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION);
+        if (fineStatus !== RESULTS.GRANTED) return fineStatus;
+
+        if (!background) return 'granted';
+
+        // Android 10+: background location is a separate permission
+        if (Platform.Version >= 29) {
+            // Show explanation BEFORE requesting background location
+            // (Play Store policy requires explaining why you need background location)
+            const shouldRequest = await showBackgroundLocationExplanation();
+            if (!shouldRequest) return 'denied';
+            return request(PERMISSIONS.ANDROID.ACCESS_BACKGROUND_LOCATION);
+        }
+        return 'granted';
+    }
+};
+
+// Using location after permission
+const getCurrentLocation = () => {
+    return new Promise<GeolocationPosition>((resolve, reject) => {
+        Geolocation.getCurrentPosition(
+            resolve,
+            reject,
+            {
+                enableHighAccuracy: true,
+                timeout: 15000,
+                maximumAge: 10000,
+            }
+        );
+    });
+};
+
+// Attendance module — location on check-in
+const checkInWithLocation = async () => {
+    const permStatus = await requestLocationPermission();
+    if (permStatus !== 'granted') {
+        Alert.alert('Location required', 'Location is needed to verify attendance');
+        return;
+    }
+    const position = await getCurrentLocation();
+    await api.checkIn({ latitude: position.coords.latitude, longitude: position.coords.longitude });
+};
+```
+
+---
+
+### Q463. How do you handle camera and photo library permissions?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Camera Permissions
+
+**Answer:**
+```js
+import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
+import { PERMISSIONS, request, check, RESULTS, openSettings } from 'react-native-permissions';
+
+// Camera permission request
+const requestCameraPermission = async (): Promise<boolean> => {
+    const permission = Platform.select({
+        ios: PERMISSIONS.IOS.CAMERA,
+        android: PERMISSIONS.ANDROID.CAMERA,
+    })!;
+
+    const status = await check(permission);
+
+    if (status === RESULTS.GRANTED) return true;
+    if (status === RESULTS.BLOCKED) {
+        Alert.alert(
+            'Camera Access Required',
+            'Please allow camera access in Settings to scan attendance QR codes.',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Open Settings', onPress: openSettings },
+            ]
+        );
+        return false;
+    }
+
+    const result = await request(permission);
+    return result === RESULTS.GRANTED;
+};
+
+// Photo library — iOS 14+ has limited access
+const requestPhotoPermission = async () => {
+    const permission = Platform.select({
+        ios: PERMISSIONS.IOS.PHOTO_LIBRARY,
+        android: Platform.Version >= 33
+            ? PERMISSIONS.ANDROID.READ_MEDIA_IMAGES
+            : PERMISSIONS.ANDROID.READ_EXTERNAL_STORAGE,
+    })!;
+
+    const status = await check(permission);
+
+    if (status === RESULTS.LIMITED) {
+        // iOS 14+: user selected specific photos
+        // Show option to select more or use limited access
+        return 'limited';
+    }
+    if (status === RESULTS.GRANTED) return 'granted';
+    if (status === RESULTS.BLOCKED) {
+        Alert.alert('Photo Access', 'Enable photo access in Settings.', [
+            { text: 'Cancel' },
+            { text: 'Settings', onPress: openSettings },
+        ]);
+        return 'blocked';
+    }
+
+    const result = await request(permission);
+    return result;
+};
+
+// Launch camera with permission check
+const openCamera = async () => {
+    const granted = await requestCameraPermission();
+    if (!granted) return;
+
+    launchCamera(
+        { mediaType: 'photo', quality: 0.8, saveToPhotos: false },
+        (response) => {
+            if (response.didCancel) return;
+            if (response.errorCode) {
+                console.error('Camera error:', response.errorMessage);
+                return;
+            }
+            const photo = response.assets?.[0];
+            if (photo) uploadProfilePhoto(photo.uri);
+        }
+    );
+};
+```
+
+---
+
+### Q464. How do you handle notification permissions?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Notification Permissions
+
+**Answer:**
+```js
+import { Platform, Alert } from 'react-native';
+import * as Notifications from 'expo-notifications';
+// OR for bare RN:
+import { check, request, PERMISSIONS, RESULTS, openSettings } from 'react-native-permissions';
+import PushNotification from 'react-native-push-notification';
+
+// Expo approach
+const requestNotificationPermission = async (): Promise<boolean> => {
+    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+
+    if (existingStatus === 'granted') return true;
+
+    if (existingStatus === 'denied') {
+        // On iOS: denied = can never ask again
+        // On Android: denied = can ask once more (before Android 13+)
+        Alert.alert(
+            'Notifications',
+            'Enable notifications to receive attendance reminders and payslip alerts.',
+            [
+                { text: 'Not Now', style: 'cancel' },
+                { text: 'Enable', onPress: async () => {
+                    const { status } = await Notifications.requestPermissionsAsync();
+                    return status === 'granted';
+                }},
+            ]
+        );
+        return false;
+    }
+
+    const { status } = await Notifications.requestPermissionsAsync({
+        ios: {
+            allowAlert: true,
+            allowBadge: true,
+            allowSound: true,
+            allowAnnouncements: true,
+        },
+    });
+
+    return status === 'granted';
+};
+
+// Android 13+ — POST_NOTIFICATIONS runtime permission
+const requestAndroid13NotificationPermission = async () => {
+    if (Platform.OS !== 'android' || Platform.Version < 33) return true;
+
+    const status = await check(PERMISSIONS.ANDROID.POST_NOTIFICATIONS);
+    if (status === RESULTS.GRANTED) return true;
+    if (status === RESULTS.BLOCKED) {
+        openSettings();
+        return false;
+    }
+    const result = await request(PERMISSIONS.ANDROID.POST_NOTIFICATIONS);
+    return result === RESULTS.GRANTED;
+};
+
+// Best practice: ask at the right time (not on app launch)
+// Ask when user tries to enable notifications in Settings screen
+// or after completing a key flow (first check-in, first payslip)
+const enableNotificationsAtRightTime = async () => {
+    // Show custom explanation screen first
+    const userConsented = await showNotificationExplanationModal();
+    if (!userConsented) return;
+
+    const granted = await requestNotificationPermission();
+    if (granted) {
+        // Register for push + subscribe to relevant topics
+        await registerDeviceForPush();
+        await subscribeToPayrollNotifications();
+        await subscribeToAttendanceReminders();
+    }
+};
+```
+
+---
+
+### Q465. What is the permission rationale and when do you show it?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Permission UX
+
+**Answer:**
+A permission rationale is a screen/dialog explaining WHY you need a permission before asking the OS for it. Required by Play Store policy for sensitive permissions (location always, background location, contacts).
+
+```js
+import { PermissionsAndroid } from 'react-native';
+
+// Android — shouldShowRequestPermissionRationale
+// true = user denied once before, show explanation before asking again
+// false = never asked OR user selected "Don't ask again"
+
+const requestLocationWithRationale = async () => {
+    const permission = PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION;
+
+    // Check if we should show rationale
+    const shouldShowRationale = await PermissionsAndroid.shouldShowRequestPermissionRationale(permission);
+
+    if (shouldShowRationale) {
+        // User previously denied — explain why we need it
+        const userAccepted = await showRationaleModal({
+            title: 'Location Access',
+            message: 'We use your location to verify you are present at the workplace during check-in. This helps prevent buddy punching.',
+            icon: 'location',
+            confirmText: 'Allow Access',
+            cancelText: 'Not Now',
+        });
+        if (!userAccepted) return false;
+    }
+
+    const result = await PermissionsAndroid.request(permission, {
+        title: 'Location Access Required',
+        message: 'Allow location access for attendance verification.',
+        buttonPositive: 'Allow',
+        buttonNegative: 'Deny',
+        buttonNeutral: 'Ask Me Later',
+    });
+
+    return result === PermissionsAndroid.RESULTS.GRANTED;
+};
+
+// Cross-platform rationale flow
+const usePermissionRequest = () => {
+    const requestWithRationale = async (config: {
+        permission: string;
+        title: string;
+        rationale: string;
+        settingsMessage: string;
+    }) => {
+        const status = await check(config.permission);
+
+        if (status === RESULTS.GRANTED) return true;
+        if (status === RESULTS.BLOCKED) {
+            // Show "go to Settings" dialog
+            Alert.alert(config.title, config.settingsMessage,
+                [{ text: 'Open Settings', onPress: openSettings }, { text: 'Cancel' }]
+            );
+            return false;
+        }
+
+        if (status === RESULTS.DENIED) {
+            // Show custom rationale before system dialog
+            const accepted = await showRationale(config.rationale);
+            if (!accepted) return false;
+        }
+
+        const result = await request(config.permission);
+        return result === RESULTS.GRANTED;
+    };
+
+    return { requestWithRationale };
+};
+```
+
+---
+
+### Q466. How do you handle file system access in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** File System
+
+**Answer:**
+```js
+// expo-file-system (Expo)
+import * as FileSystem from 'expo-file-system';
+
+// Available directories:
+// documentDirectory — persists, backed up (iOS), user can see
+// cacheDirectory   — temporary, can be cleared by OS
+// bundleDirectory  — read-only app bundle
+
+// Download file
+const downloadPayslip = async (url: string, month: string) => {
+    const localPath = `${FileSystem.documentDirectory}payslips/${month}.pdf`;
+
+    // Create directory if needed
+    await FileSystem.makeDirectoryAsync(
+        `${FileSystem.documentDirectory}payslips/`,
+        { intermediates: true }
+    );
+
+    const result = await FileSystem.downloadAsync(url, localPath, {
+        headers: { Authorization: `Bearer ${authToken}` },
+    });
+
+    if (result.status === 200) {
+        console.log('Downloaded to:', result.uri);
+        return result.uri;
+    }
+    throw new Error(`Download failed: ${result.status}`);
+};
+
+// Download with progress
+const { uri } = await FileSystem.downloadAsync(
+    url,
+    localPath,
+    {},
+    (downloadProgress) => {
+        const progress = downloadProgress.totalBytesWritten / downloadProgress.totalBytesExpectedToWrite;
+        setDownloadProgress(progress);
+    }
+);
+
+// Read file
+const content = await FileSystem.readAsStringAsync(localPath);
+const base64 = await FileSystem.readAsStringAsync(localPath, { encoding: FileSystem.EncodingType.Base64 });
+
+// Write file
+await FileSystem.writeAsStringAsync(localPath, 'File content here');
+
+// Check if file exists
+const info = await FileSystem.getInfoAsync(localPath);
+if (info.exists) {
+    console.log('Size:', info.size, 'bytes');
+    console.log('Modified:', new Date(info.modificationTime * 1000));
+}
+
+// Delete file
+await FileSystem.deleteAsync(localPath, { idempotent: true }); // idempotent = no error if missing
+
+// List directory
+const files = await FileSystem.readDirectoryAsync(FileSystem.documentDirectory + 'payslips/');
+console.log('Payslips:', files);
+
+// Move file
+await FileSystem.moveAsync({ from: tempPath, to: permanentPath });
+
+// Copy file
+await FileSystem.copyAsync({ from: sourcePath, to: destPath });
+```
+
+---
+
+### Q467. How do you handle Bluetooth permissions?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** BLE Permissions
+
+**Answer:**
+Bluetooth permissions changed significantly in Android 12 (API 31) — split into `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`, `BLUETOOTH_ADVERTISE`.
+
+```js
+// Bluetooth permission handling
+import { Platform, PermissionsAndroid } from 'react-native';
+import { check, request, PERMISSIONS, RESULTS } from 'react-native-permissions';
+
+const requestBluetoothPermissions = async () => {
+    if (Platform.OS === 'android') {
+        if (Platform.Version >= 31) {
+            // Android 12+ — granular BLE permissions
+            const statuses = await requestMultiple([
+                PERMISSIONS.ANDROID.BLUETOOTH_SCAN,
+                PERMISSIONS.ANDROID.BLUETOOTH_CONNECT,
+            ]);
+
+            const scanGranted = statuses[PERMISSIONS.ANDROID.BLUETOOTH_SCAN] === RESULTS.GRANTED;
+            const connectGranted = statuses[PERMISSIONS.ANDROID.BLUETOOTH_CONNECT] === RESULTS.GRANTED;
+
+            if (!scanGranted || !connectGranted) {
+                Alert.alert(
+                    'Bluetooth Required',
+                    'Bluetooth permissions are needed to scan for attendance beacons.',
+                    [{ text: 'Open Settings', onPress: openSettings }]
+                );
+                return false;
+            }
+
+            // Also need location for BLE scanning (even on Android 12)
+            const locationStatus = await request(PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION);
+            return locationStatus === RESULTS.GRANTED;
+
+        } else if (Platform.Version >= 23) {
+            // Android 6-11 — just location needed for BLE
+            const status = await request(PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION);
+            return status === RESULTS.GRANTED;
+        }
+        return true; // Android < 6: no runtime permissions
+
+    } else {
+        // iOS
+        // iOS 13+: BLUETOOTH is handled by CoreBluetooth — no explicit permission
+        // iOS will show its own permission dialog on first BT use
+        // Info.plist requires: NSBluetoothAlwaysUsageDescription
+        return true; // permission will be shown when BT is first used
+    }
+};
+
+// AndroidManifest.xml (bare RN) — required permissions
+// <uses-permission android:name="android.permission.BLUETOOTH" />
+// <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+// <!-- Android 12+ -->
+// <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+// <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+// <!-- Location needed for BLE scanning -->
+// <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+```
+
+---
+
+### Q468. How do you implement a permission management screen?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Permission UX
+
+**Answer:**
+```js
+import { check, openSettings, PERMISSIONS, RESULTS } from 'react-native-permissions';
+
+const REQUIRED_PERMISSIONS = [
+    {
+        key: 'camera',
+        permission: Platform.select({ ios: PERMISSIONS.IOS.CAMERA, android: PERMISSIONS.ANDROID.CAMERA }),
+        title: 'Camera',
+        description: 'Scan QR codes for attendance',
+        icon: 'camera',
+        required: true,
+    },
+    {
+        key: 'location',
+        permission: Platform.select({ ios: PERMISSIONS.IOS.LOCATION_WHEN_IN_USE, android: PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION }),
+        title: 'Location',
+        description: 'Verify attendance location',
+        icon: 'location-on',
+        required: true,
+    },
+    {
+        key: 'notifications',
+        permission: Platform.select({ ios: PERMISSIONS.IOS.NOTIFICATIONS, android: PERMISSIONS.ANDROID.POST_NOTIFICATIONS }),
+        title: 'Notifications',
+        description: 'Receive payslip and attendance alerts',
+        icon: 'notifications',
+        required: false,
+    },
+];
+
+const PermissionsScreen = () => {
+    const [statuses, setStatuses] = useState<Record<string, string>>({});
+
+    const checkAllPermissions = useCallback(async () => {
+        const results: Record<string, string> = {};
+        await Promise.all(
+            REQUIRED_PERMISSIONS.map(async ({ key, permission }) => {
+                if (permission) {
+                    results[key] = await check(permission);
+                }
+            })
+        );
+        setStatuses(results);
+    }, []);
+
+    useFocusEffect(useCallback(() => {
+        checkAllPermissions(); // refresh on focus (user may have changed in Settings)
+    }, [checkAllPermissions]));
+
+    const getStatusIcon = (status: string) => {
+        switch (status) {
+            case RESULTS.GRANTED: return { icon: 'check-circle', color: '#4CAF50' };
+            case RESULTS.BLOCKED: return { icon: 'cancel', color: '#F44336' };
+            case RESULTS.DENIED: return { icon: 'radio-button-unchecked', color: '#FF9800' };
+            default: return { icon: 'help', color: '#9E9E9E' };
+        }
+    };
+
+    return (
+        <ScrollView contentContainerStyle={styles.container}>
+            <Text style={styles.title}>App Permissions</Text>
+            <Text style={styles.subtitle}>
+                These permissions help the app function correctly
+            </Text>
+
+            {REQUIRED_PERMISSIONS.map(perm => {
+                const status = statuses[perm.key] ?? RESULTS.UNAVAILABLE;
+                const { icon, color } = getStatusIcon(status);
+
+                return (
+                    <Pressable
+                        key={perm.key}
+                        style={styles.permissionRow}
+                        onPress={status === RESULTS.BLOCKED ? openSettings : () => requestPermission(perm)}
+                    >
+                        <Icon name={perm.icon} size={28} color="#333" />
+                        <View style={styles.permissionInfo}>
+                            <Text style={styles.permissionTitle}>
+                                {perm.title}
+                                {perm.required && <Text style={{ color: 'red' }}> *</Text>}
+                            </Text>
+                            <Text style={styles.permissionDesc}>{perm.description}</Text>
+                            {status === RESULTS.BLOCKED && (
+                                <Text style={{ color: '#F44336', fontSize: 12 }}>
+                                    Tap to open Settings
+                                </Text>
+                            )}
+                        </View>
+                        <Icon name={icon} size={24} color={color} />
+                    </Pressable>
+                );
+            })}
+
+            <Button
+                title="Continue"
+                disabled={REQUIRED_PERMISSIONS.filter(p => p.required).some(
+                    p => statuses[p.key] !== RESULTS.GRANTED
+                )}
+                onPress={onContinue}
+            />
+        </ScrollView>
+    );
+};
+```
+
+---
+
+### Q469. How do you handle contacts permissions in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Low | **Category:** Contacts Permissions
+
+**Answer:**
+```js
+import Contacts from 'react-native-contacts';
+import { check, request, PERMISSIONS, RESULTS } from 'react-native-permissions';
+
+const requestContactsPermission = async (): Promise<boolean> => {
+    const permission = Platform.select({
+        ios: PERMISSIONS.IOS.CONTACTS,
+        android: PERMISSIONS.ANDROID.READ_CONTACTS,
+    })!;
+
+    const status = await check(permission);
+
+    if (status === RESULTS.GRANTED) return true;
+    if (status === RESULTS.BLOCKED) {
+        Alert.alert('Contacts Access', 'Enable contacts access in Settings to import employees.', [
+            { text: 'Cancel' },
+            { text: 'Open Settings', onPress: openSettings },
+        ]);
+        return false;
+    }
+
+    const result = await request(permission);
+    return result === RESULTS.GRANTED;
+};
+
+// Import contacts (e.g., bulk import employees)
+const importEmployeeContacts = async () => {
+    const granted = await requestContactsPermission();
+    if (!granted) return;
+
+    const contacts = await Contacts.getAll();
+    const employees = contacts
+        .filter(c => c.phoneNumbers.length > 0 && c.emailAddresses.length > 0)
+        .map(c => ({
+            name: `${c.givenName} ${c.familyName}`.trim(),
+            phone: c.phoneNumbers[0]?.number,
+            email: c.emailAddresses[0]?.email,
+        }));
+
+    return employees;
+};
+
+// Info.plist (iOS):
+// NSContactsUsageDescription: "Import employee contacts to auto-fill details"
+
+// AndroidManifest.xml:
+// <uses-permission android:name="android.permission.READ_CONTACTS" />
+```
+
+---
+
+### Q470. How do you handle microphone permissions for voice recording?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Low | **Category:** Microphone Permissions
+
+**Answer:**
+```js
+import { check, request, PERMISSIONS, RESULTS } from 'react-native-permissions';
+import AudioRecorderPlayer from 'react-native-audio-recorder-player';
+
+const requestMicPermission = async (): Promise<boolean> => {
+    const permission = Platform.select({
+        ios: PERMISSIONS.IOS.MICROPHONE,
+        android: PERMISSIONS.ANDROID.RECORD_AUDIO,
+    })!;
+
+    const status = await check(permission);
+
+    switch (status) {
+        case RESULTS.GRANTED:
+            return true;
+        case RESULTS.BLOCKED:
+            Alert.alert(
+                'Microphone Access',
+                'Enable microphone access in Settings to record audio notes.',
+                [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Open Settings', onPress: openSettings },
+                ]
+            );
+            return false;
+        case RESULTS.DENIED: {
+            const result = await request(permission);
+            return result === RESULTS.GRANTED;
+        }
+        default:
+            return false;
+    }
+};
+
+// Audio recording with permission check
+const audioRecorderPlayer = new AudioRecorderPlayer();
+
+const startRecording = async () => {
+    const granted = await requestMicPermission();
+    if (!granted) return;
+
+    const path = Platform.select({
+        ios: 'note_audio.m4a',
+        android: `${FileSystem.DocumentDirectoryPath}/note_audio.mp3`,
+    });
+
+    await audioRecorderPlayer.startRecorder(path);
+    audioRecorderPlayer.addRecordBackListener((e) => {
+        setRecordingTime(audioRecorderPlayer.mmssss(Math.floor(e.currentPosition)));
+    });
+    setIsRecording(true);
+};
+
+const stopRecording = async () => {
+    const result = await audioRecorderPlayer.stopRecorder();
+    audioRecorderPlayer.removeRecordBackListener();
+    setIsRecording(false);
+    return result; // path to recorded file
+};
+```
+
+---
+
+### Q471. How do you persist navigation state in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Navigation State Persistence
+
+**Answer:**
+```js
+import { NavigationContainer } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const NAVIGATION_STATE_KEY = 'NAVIGATION_STATE_V1';
+
+const App = () => {
+    const [isReady, setIsReady] = useState(false);
+    const [initialState, setInitialState] = useState<NavigationState | undefined>();
+
+    useEffect(() => {
+        const restoreState = async () => {
+            try {
+                const savedStateString = await AsyncStorage.getItem(NAVIGATION_STATE_KEY);
+                const state = savedStateString ? JSON.parse(savedStateString) : undefined;
+
+                if (state !== undefined) {
+                    setInitialState(state);
+                }
+            } catch (e) {
+                console.warn('Failed to restore navigation state:', e);
+            } finally {
+                setIsReady(true);
+            }
+        };
+
+        // Only restore on development (deep links won't work if state is restored)
+        if (!isReadyRef.current) {
+            restoreState();
+        }
+    }, []);
+
+    if (!isReady) return null;
+
+    return (
+        <NavigationContainer
+            initialState={initialState}
+            onStateChange={(state) => {
+                // Persist state on every change
+                // Note: Debounce this if performance is a concern
+                AsyncStorage.setItem(NAVIGATION_STATE_KEY, JSON.stringify(state));
+            }}
+        >
+            <AppNavigator />
+        </NavigationContainer>
+    );
+};
+
+// Clear navigation state on logout
+const logout = async () => {
+    await AsyncStorage.removeItem(NAVIGATION_STATE_KEY);
+    dispatch(clearAuth());
+    // Navigate to auth stack
+};
+```
+
+---
+
+### Q472. How do you implement app-wide theme persistence?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Theme Storage
+
+**Answer:**
+```js
+import { MMKV } from 'react-native-mmkv';
+import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
+
+const storage = new MMKV();
+
+// Zustand store with MMKV persistence
+interface ThemeStore {
+    theme: 'light' | 'dark' | 'system';
+    fontSize: 'small' | 'medium' | 'large';
+    language: 'en' | 'hi' | 'ta';
+    setTheme: (theme: 'light' | 'dark' | 'system') => void;
+    setFontSize: (size: 'small' | 'medium' | 'large') => void;
+    setLanguage: (lang: 'en' | 'hi' | 'ta') => void;
+}
+
+const mmkvStorage = {
+    getItem: (key: string) => storage.getString(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+    removeItem: (key: string) => storage.delete(key),
+};
+
+export const useThemeStore = create<ThemeStore>()(
+    persist(
+        (set) => ({
+            theme: 'system',
+            fontSize: 'medium',
+            language: 'en',
+            setTheme: (theme) => set({ theme }),
+            setFontSize: (fontSize) => set({ fontSize }),
+            setLanguage: (language) => set({ language }),
+        }),
+        {
+            name: 'theme-preferences',
+            storage: createJSONStorage(() => mmkvStorage),
+        }
+    )
+);
+
+// Theme provider — apply persisted theme
+import { useColorScheme } from 'react-native';
+
+const ThemeProvider = ({ children }) => {
+    const { theme } = useThemeStore();
+    const systemColorScheme = useColorScheme();
+
+    const activeTheme = theme === 'system' ? systemColorScheme : theme;
+
+    return (
+        <ThemeContext.Provider value={{ theme: activeTheme, isDark: activeTheme === 'dark' }}>
+            {children}
+        </ThemeContext.Provider>
+    );
+};
+```
+
+---
+
+### Q473. How do you store and manage authentication tokens securely?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Very High | **Category:** Auth Token Storage
+
+**Answer:**
+```js
+import * as Keychain from 'react-native-keychain';
+import jwtDecode from 'jwt-decode';
+
+const TOKEN_SERVICE = 'com.yourcompany.app.auth';
+
+// Token storage service
+export const TokenStorage = {
+    // Store tokens (access + refresh)
+    async save(accessToken: string, refreshToken: string): Promise<void> {
+        await Keychain.setInternetCredentials(
+            TOKEN_SERVICE,
+            'access_token',      // username field — repurposed for identifier
+            JSON.stringify({ accessToken, refreshToken, savedAt: Date.now() }),
+            {
+                accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+                // No biometric — tokens should be accessible without auth prompt
+            }
+        );
+    },
+
+    // Get tokens
+    async get(): Promise<{ accessToken: string; refreshToken: string } | null> {
+        const result = await Keychain.getInternetCredentials(TOKEN_SERVICE);
+        if (!result) return null;
+        try {
+            return JSON.parse(result.password);
+        } catch {
+            return null;
+        }
+    },
+
+    // Check if access token is expired
+    async isAccessTokenValid(): Promise<boolean> {
+        const tokens = await this.get();
+        if (!tokens?.accessToken) return false;
+        try {
+            const decoded = jwtDecode<{ exp: number }>(tokens.accessToken);
+            const now = Date.now() / 1000;
+            return decoded.exp > now + 60; // 60s buffer
+        } catch {
+            return false;
+        }
+    },
+
+    // Refresh using refresh token
+    async refresh(): Promise<string | null> {
+        const tokens = await this.get();
+        if (!tokens?.refreshToken) return null;
+
+        const response = await api.refreshToken(tokens.refreshToken);
+        if (response.accessToken) {
+            await this.save(response.accessToken, tokens.refreshToken);
+            return response.accessToken;
+        }
+        return null;
+    },
+
+    // Clear on logout
+    async clear(): Promise<void> {
+        await Keychain.resetInternetCredentials(TOKEN_SERVICE);
+    },
+};
+
+// Auth interceptor — automatic token refresh
+api.interceptors.request.use(async (config) => {
+    const isValid = await TokenStorage.isAccessTokenValid();
+
+    if (!isValid) {
+        const newToken = await TokenStorage.refresh();
+        if (newToken) {
+            config.headers.Authorization = `Bearer ${newToken}`;
+        } else {
+            // Refresh failed — force logout
+            store.dispatch(logout());
+            throw new Error('Session expired');
+        }
+    } else {
+        const tokens = await TokenStorage.get();
+        if (tokens?.accessToken) {
+            config.headers.Authorization = `Bearer ${tokens.accessToken}`;
+        }
+    }
+
+    return config;
+});
+```
+
+---
+
+### Q474. How do you handle biometric + keychain integration for app lock?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Biometric + Storage
+
+**Answer:**
+```js
+import * as Keychain from 'react-native-keychain';
+import { MMKV } from 'react-native-mmkv';
+import TouchID from 'react-native-touch-id';
+
+const storage = new MMKV();
+
+// App lock implementation
+export const AppLock = {
+    // Enable app lock — stores flag + ensures biometric is enrolled
+    async enable(): Promise<boolean> {
+        try {
+            // Verify biometric works before enabling
+            await TouchID.authenticate('Enable app lock', {
+                title: 'Set up App Lock',
+                fallbackLabel: 'Use PIN',
+            });
+            storage.set('appLockEnabled', true);
+            storage.set('appLockEnabledAt', Date.now());
+            return true;
+        } catch (error) {
+            return false;
+        }
+    },
+
+    // Disable app lock
+    async disable(): Promise<boolean> {
+        try {
+            await TouchID.authenticate('Disable app lock');
+            storage.set('appLockEnabled', false);
+            return true;
+        } catch {
+            return false;
+        }
+    },
+
+    isEnabled: (): boolean => storage.getBoolean('appLockEnabled') ?? false,
+
+    // Authenticate to unlock
+    async authenticate(): Promise<'success' | 'cancelled' | 'failed'> {
+        try {
+            await TouchID.authenticate('Unlock app', {
+                title: 'Authenticate',
+                fallbackLabel: 'Use PIN instead',
+                cancelLabel: 'Cancel',
+            });
+            return 'success';
+        } catch (error: any) {
+            if (error.name === 'LAErrorUserCancel') return 'cancelled';
+            return 'failed';
+        }
+    },
+};
+
+// AppLock screen — shows when app resumes
+const AppLockScreen = ({ onUnlock }) => {
+    const [isAuthenticating, setIsAuthenticating] = useState(false);
+
+    useEffect(() => {
+        // Auto-trigger on mount
+        handleAuthenticate();
+    }, []);
+
+    const handleAuthenticate = async () => {
+        if (isAuthenticating) return;
+        setIsAuthenticating(true);
+        const result = await AppLock.authenticate();
+        setIsAuthenticating(false);
+        if (result === 'success') onUnlock();
+    };
+
+    return (
+        <View style={styles.lockScreen}>
+            <Image source={require('./assets/app-icon.png')} style={styles.icon} />
+            <Text style={styles.title}>Your ERP App</Text>
+            <Text style={styles.subtitle}>Authentication required</Text>
+            <Pressable style={styles.biometricButton} onPress={handleAuthenticate}>
+                <Icon name="fingerprint" size={64} color="#6200EE" />
+                <Text>Touch to unlock</Text>
+            </Pressable>
+        </View>
+    );
+};
+```
+
+---
+
+### Q475. How do you handle storage when the app is backgrounded or terminated?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Storage + App Lifecycle
+
+**Answer:**
+```js
+import { AppState, AppStateStatus } from 'react-native';
+
+// Flush pending writes on background
+const useStorageFlush = () => {
+    const appState = useRef<AppStateStatus>(AppState.currentState);
+    const pendingWrites = useRef<Map<string, any>>(new Map());
+
+    // Queue a write (debounced)
+    const queueWrite = useCallback((key: string, value: any) => {
+        pendingWrites.current.set(key, value);
+    }, []);
+
+    // Flush all pending writes
+    const flushWrites = useCallback(async () => {
+        if (pendingWrites.current.size === 0) return;
+
+        const writes = Array.from(pendingWrites.current.entries());
+        pendingWrites.current.clear();
+
+        // MMKV is synchronous — all writes happen immediately
+        writes.forEach(([key, value]) => {
+            storage.set(key, JSON.stringify(value));
+        });
+    }, []);
+
+    useEffect(() => {
+        const handleAppStateChange = (nextState: AppStateStatus) => {
+            if (
+                appState.current === 'active' &&
+                (nextState === 'background' || nextState === 'inactive')
+            ) {
+                // App going to background — flush all pending writes
+                flushWrites();
+            }
+            appState.current = nextState;
+        };
+
+        const sub = AppState.addEventListener('change', handleAppStateChange);
+        return () => sub.remove();
+    }, [flushWrites]);
+
+    return { queueWrite, flushWrites };
+};
+
+// AsyncStorage on terminate — not guaranteed to complete
+// MMKV / Keychain — writes are atomic, persist even on force-kill
+
+// Best practice: for critical data, write immediately (not debounced)
+// For non-critical (cache, preferences), debounce and flush on background
+
+// Detect app kill vs graceful exit
+// There's no "onTerminate" in RN — iOS/Android can kill app without notice
+// Strategy: write critical state on every change, not just on background
+```
+
+---
+
+### Q476. How do you implement a download manager in React Native?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** File Storage
+
+**Answer:**
+```js
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import { Platform } from 'react-native';
+
+interface DownloadTask {
+    id: string;
+    url: string;
+    filename: string;
+    progress: number;
+    status: 'pending' | 'downloading' | 'completed' | 'failed';
+    localPath?: string;
+    error?: string;
+}
+
+const useDownloadManager = () => {
+    const [downloads, setDownloads] = useState<Record<string, DownloadTask>>({});
+    const downloadRefs = useRef<Record<string, FileSystem.DownloadResumable>>({});
+
+    const startDownload = async (url: string, filename: string, headers?: Record<string, string>) => {
+        const id = `${filename}-${Date.now()}`;
+        const localPath = `${FileSystem.documentDirectory}downloads/${filename}`;
+
+        // Create directory
+        await FileSystem.makeDirectoryAsync(
+            `${FileSystem.documentDirectory}downloads/`,
+            { intermediates: true }
+        );
+
+        setDownloads(prev => ({
+            ...prev,
+            [id]: { id, url, filename, progress: 0, status: 'downloading', localPath },
+        }));
+
+        const downloadResumable = FileSystem.createDownloadResumable(
+            url,
+            localPath,
+            { headers },
+            (progress) => {
+                const pct = progress.totalBytesWritten / progress.totalBytesExpectedToWrite;
+                setDownloads(prev => ({
+                    ...prev,
+                    [id]: { ...prev[id], progress: pct },
+                }));
+            }
+        );
+
+        downloadRefs.current[id] = downloadResumable;
+
+        try {
+            const result = await downloadResumable.downloadAsync();
+            if (result?.uri) {
+                setDownloads(prev => ({
+                    ...prev,
+                    [id]: { ...prev[id], status: 'completed', localPath: result.uri, progress: 1 },
+                }));
+                return result.uri;
+            }
+        } catch (error: any) {
+            setDownloads(prev => ({
+                ...prev,
+                [id]: { ...prev[id], status: 'failed', error: error.message },
+            }));
+            throw error;
+        } finally {
+            delete downloadRefs.current[id];
+        }
+    };
+
+    const cancelDownload = async (id: string) => {
+        await downloadRefs.current[id]?.pauseAsync();
+        delete downloadRefs.current[id];
+        setDownloads(prev => {
+            const { [id]: _, ...rest } = prev;
+            return rest;
+        });
+    };
+
+    const openFile = async (localPath: string) => {
+        const canShare = await Sharing.isAvailableAsync();
+        if (canShare) {
+            await Sharing.shareAsync(localPath);
+        } else {
+            Alert.alert('Cannot open file', 'File sharing is not available on this device');
+        }
+    };
+
+    return { downloads, startDownload, cancelDownload, openFile };
+};
+```
+
+---
+
+### Q477. What is the difference between internal storage and external storage on Android?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Android Storage
+
+**Answer:**
+```
+Android Storage Types:
+
+Internal Storage (app-private):
+├── Location: /data/data/com.yourapp/files/
+├── Access: App only (no other apps, no file manager)
+├── Cleared on: App uninstall
+├── Backup: Yes (by default)
+└── Use for: Sensitive data, app state
+
+External Storage (shared):
+├── Location: /storage/emulated/0/Android/data/com.yourapp/files/
+│   (app-specific external directory)
+├── Access: Your app (no permission needed), file manager visible
+├── Cleared on: App uninstall (app-specific external directory)
+├── Backup: No (excluded by default)
+└── Use for: User-visible files (downloaded payslips, exports)
+
+Public External Storage:
+├── Location: /storage/emulated/0/Downloads/
+├── Access: Any app with storage permission
+├── Cleared on: Never (user manages)
+└── Use for: Files user expects to keep (PDFs, exports)
+```
+
+```js
+// react-native-fs paths
+import RNFS from 'react-native-fs';
+
+// Internal app storage (private)
+const internalPath = RNFS.DocumentDirectoryPath;   // /data/data/.../files
+const cachePath = RNFS.CachesDirectoryPath;        // /data/data/.../cache
+
+// External app-specific (visible in file manager, cleared on uninstall)
+const externalPath = RNFS.ExternalDirectoryPath;   // Android only
+
+// Downloads folder (public, user-visible, persists after uninstall)
+const downloadsPath = RNFS.DownloadDirectoryPath;  // Android only
+
+// Save payslip to Downloads (user can find it)
+const savePayslipToDownloads = async (pdfBase64: string, filename: string) => {
+    const path = `${RNFS.DownloadDirectoryPath}/${filename}`;
+    await RNFS.writeFile(path, pdfBase64, 'base64');
+
+    // Notify media scanner (makes file visible in Gallery/Files immediately)
+    if (Platform.OS === 'android') {
+        await RNFS.scanFile(path);
+    }
+
+    Alert.alert('Downloaded', `Payslip saved to Downloads/${filename}`);
+    return path;
+};
+
+// Permissions needed for external storage:
+// Android < 10: READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE
+// Android 10+: No permission for app-specific external directory
+// Android 10+: READ_EXTERNAL_STORAGE for public downloads reading
+// Android 13+: READ_MEDIA_IMAGES/DOCUMENTS for specific media types
+```
+
+---
+
+### Q478. How do you cache API responses for offline use?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Caching
+
+**Answer:**
+```js
+// Method 1: React Query with MMKV persistence
+import { QueryClient } from '@tanstack/react-query';
+import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister';
+import { persistQueryClient } from '@tanstack/react-query-persist-client';
+import { MMKV } from 'react-native-mmkv';
+
+const storage = new MMKV();
+const queryClient = new QueryClient({
+    defaultOptions: {
+        queries: {
+            staleTime: 5 * 60 * 1000,      // 5 minutes fresh
+            gcTime: 24 * 60 * 60 * 1000,   // 24 hours in cache
+            retry: 3,
+            networkMode: 'offlineFirst',    // use cache when offline
+        },
+    },
+});
+
+const persister = createSyncStoragePersister({
+    storage: {
+        getItem: (key) => storage.getString(key) ?? null,
+        setItem: (key, value) => storage.set(key, value),
+        removeItem: (key) => storage.delete(key),
+    },
+    throttleTime: 1000, // write at most once per second
+});
+
+persistQueryClient({
+    queryClient,
+    persister,
+    maxAge: 24 * 60 * 60 * 1000, // 24h max cache age
+});
+
+// Method 2: Manual cache with TTL
+interface CacheEntry<T> {
+    data: T;
+    timestamp: number;
+    ttl: number; // milliseconds
+}
+
+const apiCache = {
+    set: <T>(key: string, data: T, ttlMs: number) => {
+        const entry: CacheEntry<T> = { data, timestamp: Date.now(), ttl: ttlMs };
+        storage.set(`cache:${key}`, JSON.stringify(entry));
+    },
+
+    get: <T>(key: string): T | null => {
+        const raw = storage.getString(`cache:${key}`);
+        if (!raw) return null;
+        const entry: CacheEntry<T> = JSON.parse(raw);
+        if (Date.now() - entry.timestamp > entry.ttl) {
+            storage.delete(`cache:${key}`); // expired
+            return null;
+        }
+        return entry.data;
+    },
+
+    clear: (key: string) => storage.delete(`cache:${key}`),
+    clearAll: () => storage.getAllKeys()
+        .filter(k => k.startsWith('cache:'))
+        .forEach(k => storage.delete(k)),
+};
+
+// Usage with network fallback
+const getEmployees = async (deptId: string) => {
+    const cacheKey = `employees:${deptId}`;
+    const cached = apiCache.get<Employee[]>(cacheKey);
+
+    if (cached) return cached; // serve from cache
+
+    try {
+        const fresh = await api.fetchEmployees(deptId);
+        apiCache.set(cacheKey, fresh, 5 * 60 * 1000); // cache 5 minutes
+        return fresh;
+    } catch (error) {
+        // Offline — return stale cache if available (even if expired)
+        const stale = storage.getString(`cache:${cacheKey}`);
+        if (stale) return JSON.parse(stale).data;
+        throw error;
+    }
+};
+```
+
+---
+
+### Q479. How do you handle sensitive data in app logs and crash reports?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Security + Storage
+
+**Answer:**
+```js
+// 1. Sanitise data before logging
+const sanitise = (obj: Record<string, any>): Record<string, any> => {
+    const SENSITIVE_KEYS = ['password', 'token', 'secret', 'pin', 'cvv',
+                            'cardNumber', 'aadhaar', 'pan', 'otp', 'accessToken',
+                            'refreshToken', 'authorization'];
+
+    return Object.keys(obj).reduce((acc, key) => {
+        const isSecret = SENSITIVE_KEYS.some(k =>
+            key.toLowerCase().includes(k.toLowerCase())
+        );
+        acc[key] = isSecret ? '[REDACTED]' : obj[key];
+        return acc;
+    }, {} as Record<string, any>);
+};
+
+// 2. Sentry — filter sensitive data
+Sentry.init({
+    dsn: '...',
+    beforeSend: (event) => {
+        // Remove sensitive request headers
+        if (event.request?.headers) {
+            event.request.headers = {
+                ...event.request.headers,
+                Authorization: '[REDACTED]',
+                'X-API-Key': '[REDACTED]',
+            };
+        }
+
+        // Scrub sensitive extras
+        if (event.extra) {
+            event.extra = sanitise(event.extra);
+        }
+
+        return event;
+    },
+    beforeBreadcrumb: (breadcrumb) => {
+        // Filter out sensitive API calls from breadcrumbs
+        if (breadcrumb.data?.url?.includes('/auth/')) {
+            breadcrumb.data.body = '[REDACTED]';
+        }
+        return breadcrumb;
+    },
+});
+
+// 3. Network interceptor — redact sensitive data from logs
+axios.interceptors.request.use((config) => {
+    if (__DEV__) {
+        const sanitisedConfig = { ...config };
+        if (sanitisedConfig.headers?.Authorization) {
+            sanitisedConfig.headers.Authorization = '[Bearer REDACTED]';
+        }
+        console.log('[API]', sanitisedConfig.method, sanitisedConfig.url);
+    }
+    return config;
+});
+
+// 4. Don't log sensitive fields ever
+// ❌ console.log('Login with:', { email, password });
+// ✅ console.log('Login attempt for:', email);
+
+// 5. Clear sensitive data from memory after use
+const authenticateUser = async (email: string, password: string) => {
+    try {
+        const result = await api.login(email, password);
+        await TokenStorage.save(result.accessToken, result.refreshToken);
+        return result.user;
+    } finally {
+        // Overwrite password variable (limited effect in JS but good practice)
+        // password = ''; // JS strings are immutable — GC handles this
+    }
+};
+```
+
+---
+
+### Q480. How do you implement an app settings screen that persists user preferences?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** User Preferences
+
+**Answer:**
+```js
+import { MMKV } from 'react-native-mmkv';
+import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
+
+const storage = new MMKV();
+
+// Comprehensive preferences store
+interface AppPreferences {
+    // Display
+    theme: 'light' | 'dark' | 'system';
+    fontSize: 'small' | 'medium' | 'large';
+    language: string;
+
+    // Notifications
+    notificationsEnabled: boolean;
+    attendanceReminders: boolean;
+    reminderTime: string; // "09:00"
+    payslipAlerts: boolean;
+    leaveApprovalAlerts: boolean;
+
+    // App behaviour
+    biometricLock: boolean;
+    autoLogoutMinutes: number;
+    defaultDashboardTab: string;
+
+    // Setters
+    setTheme: (theme: 'light' | 'dark' | 'system') => void;
+    setFontSize: (size: 'small' | 'medium' | 'large') => void;
+    setLanguage: (lang: string) => void;
+    toggleNotifications: () => void;
+    setReminderTime: (time: string) => void;
+    toggleBiometric: () => void;
+    setAutoLogout: (minutes: number) => void;
+    resetToDefaults: () => void;
+}
+
+const defaultPreferences = {
+    theme: 'system' as const,
+    fontSize: 'medium' as const,
+    language: 'en',
+    notificationsEnabled: true,
+    attendanceReminders: true,
+    reminderTime: '09:00',
+    payslipAlerts: true,
+    leaveApprovalAlerts: true,
+    biometricLock: false,
+    autoLogoutMinutes: 15,
+    defaultDashboardTab: 'home',
+};
+
+export const usePreferences = create<AppPreferences>()(
+    persist(
+        (set, get) => ({
+            ...defaultPreferences,
+            setTheme: (theme) => set({ theme }),
+            setFontSize: (fontSize) => set({ fontSize }),
+            setLanguage: (language) => set({ language }),
+            toggleNotifications: () => set(s => ({ notificationsEnabled: !s.notificationsEnabled })),
+            setReminderTime: (reminderTime) => set({ reminderTime }),
+            toggleBiometric: () => set(s => ({ biometricLock: !s.biometricLock })),
+            setAutoLogout: (autoLogoutMinutes) => set({ autoLogoutMinutes }),
+            resetToDefaults: () => set(defaultPreferences),
+        }),
+        {
+            name: 'app-preferences',
+            storage: createJSONStorage(() => ({
+                getItem: (key) => storage.getString(key) ?? null,
+                setItem: (key, value) => storage.set(key, value),
+                removeItem: (key) => storage.delete(key),
+            })),
+        }
+    )
+);
+
+// Settings Screen
+const SettingsScreen = () => {
+    const {
+        theme, fontSize, notificationsEnabled, biometricLock, autoLogoutMinutes,
+        setTheme, setFontSize, toggleNotifications, toggleBiometric, setAutoLogout,
+        resetToDefaults,
+    } = usePreferences();
+
+    return (
+        <ScrollView>
+            <SettingsSection title="Appearance">
+                <SettingsRow
+                    title="Theme"
+                    rightContent={
+                        <SegmentedControl
+                            values={['Light', 'Dark', 'System']}
+                            selectedIndex={['light', 'dark', 'system'].indexOf(theme)}
+                            onChange={(i) => setTheme(['light', 'dark', 'system'][i] as any)}
+                        />
+                    }
+                />
+            </SettingsSection>
+
+            <SettingsSection title="Security">
+                <SettingsRow
+                    title="Biometric Lock"
+                    subtitle="Lock app when not in use"
+                    rightContent={
+                        <Switch
+                            value={biometricLock}
+                            onValueChange={toggleBiometric}
+                            trackColor={{ true: '#6200EE' }}
+                        />
+                    }
+                />
+                <SettingsRow
+                    title="Auto Logout"
+                    subtitle={`After ${autoLogoutMinutes} minutes of inactivity`}
+                    onPress={() => showAutoLogoutPicker(setAutoLogout)}
+                />
+            </SettingsSection>
+
+            <Pressable style={styles.resetButton} onPress={() => {
+                Alert.alert('Reset Settings', 'Reset all preferences to defaults?', [
+                    { text: 'Cancel' },
+                    { text: 'Reset', style: 'destructive', onPress: resetToDefaults },
+                ]);
+            }}>
+                <Text style={styles.resetText}>Reset to Defaults</Text>
+            </Pressable>
+        </ScrollView>
+    );
+};
+```
+
+---
+
+## Sections Overview (Q481–Q500)
 
 | Section | Questions | Topics |
 |---------|-----------|--------|
-| Storage & Permissions | Q451–Q480 | AsyncStorage, Keychain, permission flows |
+| Miscellaneous | Q481–Q500 | Accessibility, internationalisation, misc APIs |
+
+---
+
+> 💡 **Tip for GitHub:** Add a `## Table of Contents` section at the top with anchor links to each question for easy navigation.
+
+---
+
+*Part 01 of 8 — [← Back to Part README](./README.md) · [← Main README](../README.md)*
+
+## Section 12: Storage & Permissions (Q451–Q480)
+
+---
+
+### Q451. What are the storage options available in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Storage Overview
+
+**Answer:**
+
+| Storage | Type | Speed | Size limit | Encrypted | Use case |
+|---------|------|-------|-----------|-----------|---------|
+| AsyncStorage | Key-value | Async | ~6MB (Android) | ❌ | Simple preferences |
+| MMKV | Key-value | Sync (fast) | ~20MB | ✅ | Auth tokens, settings |
+| Expo SecureStore | Key-value | Async | 2KB/value | ✅ (Keychain/Keystore) | Sensitive credentials |
+| SQLite (WatermelonDB) | Relational | Sync | Device storage | ✅ optional | Complex data, ERP |
+| Realm | Object | Sync | Device storage | ✅ | Complex, offline-first |
+| RNFS (File System) | Files | Async | Device storage | ❌ | Blobs, PDFs, media |
+| React Query cache | In-memory | Sync | RAM | ❌ | Server state cache |
+
+```js
+// Decision flowchart:
+// Small, simple, non-sensitive? → AsyncStorage
+// Small, simple, SENSITIVE (token, PIN)? → MMKV encrypted / SecureStore
+// Fast synchronous access? → MMKV
+// Relational data, complex queries? → WatermelonDB / SQLite
+// Large files (PDFs, images)? → react-native-fs
+// Server state with caching? → React Query / SWR
+```
+
+**From your ERP project (real answer for interviews):**
+> "We used MMKV for user session tokens (fast synchronous reads on app start), AsyncStorage for user preferences (theme, language), WatermelonDB for the offline employee database (7,000+ records with complex queries), and RNFS for storing generated payslip PDFs."
+
+---
+
+### Q452. What is AsyncStorage and what are its limitations?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** AsyncStorage
+
+**Answer:**
+AsyncStorage is React Native's built-in persistent key-value store. It's unencrypted, asynchronous, and string-only.
+
+```js
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Basic operations — all return Promises
+// Store a value (must be string)
+await AsyncStorage.setItem('theme', 'dark');
+await AsyncStorage.setItem('user', JSON.stringify({ id: '1', name: 'Devesh' }));
+
+// Read a value
+const theme = await AsyncStorage.getItem('theme');           // 'dark' or null
+const userStr = await AsyncStorage.getItem('user');
+const user = userStr ? JSON.parse(userStr) : null;
+
+// Remove a value
+await AsyncStorage.removeItem('theme');
+
+// Clear all (use carefully — clears everything including third-party lib data)
+await AsyncStorage.clear();
+
+// Batch operations (more efficient)
+const pairs = [['key1', 'val1'], ['key2', 'val2']];
+await AsyncStorage.multiSet(pairs);
+
+const results = await AsyncStorage.multiGet(['key1', 'key2']);
+// results: [['key1', 'val1'], ['key2', 'val2']]
+
+await AsyncStorage.multiRemove(['key1', 'key2']);
+
+// Get all stored keys
+const keys = await AsyncStorage.getAllKeys();
+```
+
+**Limitations:**
+```
+❌ Unencrypted — stored as plain text on device
+❌ Slow — async I/O, not suitable for frequent access
+❌ String-only — must JSON.stringify/parse objects
+❌ Small size limit — ~6MB total on Android, ~20MB on iOS
+❌ No indexing — can't query, only exact key lookups
+❌ No encryption — sensitive data (tokens, PINs) should NOT use AsyncStorage
+❌ Deprecated in React Native core — now a community package
+❌ No transactions — no atomic multi-key operations
+```
+
+---
+
+### Q453. How do you create a typed AsyncStorage wrapper?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** AsyncStorage
+
+**Answer:**
+```typescript
+// src/storage/storage.ts — typed, safe storage wrapper
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Define all your storage keys as constants (prevents typos)
+export const STORAGE_KEYS = {
+    AUTH_TOKEN: 'auth_token',
+    REFRESH_TOKEN: 'refresh_token',
+    USER_DATA: 'user_data',
+    THEME: 'app_theme',
+    LANGUAGE: 'app_language',
+    LAST_SYNC: 'last_sync_timestamp',
+    ONBOARDING_DONE: 'onboarding_complete',
+} as const;
+
+type StorageKey = typeof STORAGE_KEYS[keyof typeof STORAGE_KEYS];
+
+// Type-safe storage operations
+export const Storage = {
+    async setString(key: StorageKey, value: string): Promise<void> {
+        await AsyncStorage.setItem(key, value);
+    },
+
+    async getString(key: StorageKey): Promise<string | null> {
+        return AsyncStorage.getItem(key);
+    },
+
+    async setObject<T>(key: StorageKey, value: T): Promise<void> {
+        await AsyncStorage.setItem(key, JSON.stringify(value));
+    },
+
+    async getObject<T>(key: StorageKey): Promise<T | null> {
+        const value = await AsyncStorage.getItem(key);
+        if (!value) return null;
+        try {
+            return JSON.parse(value) as T;
+        } catch {
+            return null;
+        }
+    },
+
+    async setBoolean(key: StorageKey, value: boolean): Promise<void> {
+        await AsyncStorage.setItem(key, String(value));
+    },
+
+    async getBoolean(key: StorageKey): Promise<boolean | null> {
+        const value = await AsyncStorage.getItem(key);
+        if (value === null) return null;
+        return value === 'true';
+    },
+
+    async remove(key: StorageKey): Promise<void> {
+        await AsyncStorage.removeItem(key);
+    },
+
+    async clearAll(): Promise<void> {
+        await AsyncStorage.multiRemove(Object.values(STORAGE_KEYS));
+    },
+};
+
+// Usage — fully typed, no raw string keys
+const theme = await Storage.getString(STORAGE_KEYS.THEME);
+const user = await Storage.getObject<User>(STORAGE_KEYS.USER_DATA);
+await Storage.setBoolean(STORAGE_KEYS.ONBOARDING_DONE, true);
+```
+
+---
+
+### Q454. What is MMKV and how does it compare to AsyncStorage?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** MMKV
+
+**Answer:**
+MMKV (Mobile Mapped Key-Value) is a C++ key-value storage library by WeChat, wrapped for React Native. It's 10–100× faster than AsyncStorage and supports synchronous reads.
+
+| Feature | AsyncStorage | MMKV |
+|---------|-------------|------|
+| Speed | ~5–20ms | 0.01–0.1ms |
+| API | Async (Promise) | Synchronous |
+| Encryption | ❌ | ✅ AES-256 |
+| Multi-process | ❌ | ✅ |
+| Implementation | JS + Native bridge | C++ with mmap |
+| React Native bridge | Yes (slow) | JSI (fast) |
+
+```js
+import { MMKV } from 'react-native-mmkv';
+
+// Default instance
+const storage = new MMKV();
+
+// Encrypted instance
+const secureStorage = new MMKV({
+    id: 'secure-storage',
+    encryptionKey: 'your-encryption-key-32-bytes!!!!',
+    // In production: derive key from device-specific secret
+});
+
+// Per-user storage (isolates data between user sessions)
+const getUserStorage = (userId: string) =>
+    new MMKV({ id: `user-${userId}` });
+
+// Synchronous read/write — no await needed!
+storage.set('authToken', 'jwt.token.here');
+storage.set('isLoggedIn', true);
+storage.set('loginCount', 42);
+storage.set('userData', JSON.stringify({ id: '1', name: 'Devesh' }));
+
+const token = storage.getString('authToken');    // 'jwt.token.here'
+const loggedIn = storage.getBoolean('isLoggedIn'); // true
+const count = storage.getNumber('loginCount');    // 42
+const userStr = storage.getString('userData');
+const user = userStr ? JSON.parse(userStr) : null;
+
+// Type-safe number parsing
+const salary = storage.getNumber('salary') ?? 0;
+
+// Delete
+storage.delete('authToken');
+storage.clearAll();
+
+// Check existence
+const hasKey = storage.contains('authToken');
+
+// All keys
+const allKeys = storage.getAllKeys();
+
+// Listeners (react to changes)
+const listener = storage.addOnValueChangedListener((changedKey) => {
+    console.log('Changed:', changedKey, '=', storage.getString(changedKey));
+});
+// Cleanup:
+listener.remove();
+```
+
+---
+
+### Q455. How do you integrate MMKV with Zustand for persistent state?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** MMKV + State Management
+
+**Answer:**
+```typescript
+import { create } from 'zustand';
+import { persist, createJSONStorage, StateStorage } from 'zustand/middleware';
+import { MMKV } from 'react-native-mmkv';
+
+const storage = new MMKV();
+
+// Zustand-compatible MMKV storage adapter
+const zustandMMKVStorage: StateStorage = {
+    getItem: (name: string): string | null => storage.getString(name) ?? null,
+    setItem: (name: string, value: string): void => storage.set(name, value),
+    removeItem: (name: string): void => storage.delete(name),
+};
+
+// Auth store with MMKV persistence
+interface AuthState {
+    token: string | null;
+    user: User | null;
+    isLoggedIn: boolean;
+    setAuth: (token: string, user: User) => void;
+    logout: () => void;
+}
+
+export const useAuthStore = create<AuthState>()(
+    persist(
+        (set) => ({
+            token: null,
+            user: null,
+            isLoggedIn: false,
+
+            setAuth: (token, user) =>
+                set({ token, user, isLoggedIn: true }),
+
+            logout: () =>
+                set({ token: null, user: null, isLoggedIn: false }),
+        }),
+        {
+            name: 'auth-storage',
+            storage: createJSONStorage(() => zustandMMKVStorage),
+            // Only persist specific fields
+            partialize: (state) => ({
+                token: state.token,
+                user: state.user,
+                isLoggedIn: state.isLoggedIn,
+            }),
+        }
+    )
+);
+
+// Usage — reads from MMKV on first render, then reactive
+const { token, user, isLoggedIn, logout } = useAuthStore();
+
+// Because MMKV is sync and zustand reads synchronously:
+// No "flash of unauthenticated content" on app start
+// Token available immediately, before first render
+```
+
+---
+
+### Q456. What is Keychain (iOS) / Keystore (Android) and when do you use them?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Secure Storage
+
+**Answer:**
+The Keychain (iOS) and Keystore (Android) are the OS-level secure storage systems. They:
+- Encrypt data using hardware-backed keys (Secure Enclave on modern iPhones)
+- Survive app uninstall on iOS (Keychain data persists unless explicitly deleted)
+- Can require biometric authentication to access specific items
+- Are the only appropriate place to store user credentials, auth tokens, and encryption keys
+
+```js
+// react-native-keychain — wraps both Keychain and Keystore
+import * as Keychain from 'react-native-keychain';
+
+// Store credentials (username + password)
+await Keychain.setGenericPassword('devesh@example.com', 'user-jwt-token', {
+    service: 'com.yourapp.authtoken',       // namespace for your app
+    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    // WHEN_UNLOCKED                     — accessible when device unlocked
+    // WHEN_UNLOCKED_THIS_DEVICE_ONLY    — also: can't be restored to another device
+    // AFTER_FIRST_UNLOCK                — accessible after first unlock (background safe)
+    // ALWAYS                            — always accessible (no lock protection)
+});
+
+// Retrieve
+const credentials = await Keychain.getGenericPassword({
+    service: 'com.yourapp.authtoken',
+});
+
+if (credentials) {
+    const { username: email, password: token } = credentials;
+    // use token
+} else {
+    // No credentials stored — first run or logged out
+}
+
+// Delete
+await Keychain.resetGenericPassword({ service: 'com.yourapp.authtoken' });
+
+// Biometric-protected keychain item
+await Keychain.setGenericPassword('user', sensitiveData, {
+    accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_ANY,
+    // BIOMETRY_ANY                  — Face ID or Touch ID
+    // BIOMETRY_CURRENT_SET          — current enrolled biometric only
+    // BIOMETRY_ANY_OR_DEVICE_PASSCODE — biometric OR passcode fallback
+    // DEVICE_PASSCODE               — passcode only
+    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED,
+});
+
+// Retrieve with biometric prompt
+try {
+    const result = await Keychain.getGenericPassword({
+        authenticationPrompt: {
+            title: 'Authenticate to view payment info',
+            subtitle: 'Confirm your identity',
+            cancel: 'Cancel',
+        },
+    });
+} catch (error) {
+    if (error.message.includes('User canceled')) {
+        // User dismissed biometric prompt
+    }
+}
+```
+
+---
+
+### Q457. What is `expo-secure-store` and how does it compare to react-native-keychain?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Secure Storage
+
+**Answer:**
+```js
+import * as SecureStore from 'expo-secure-store';
+
+// expo-secure-store — Expo SDK's Keychain/Keystore wrapper
+// Simpler API, Expo ecosystem, handles both platforms automatically
+
+// Store
+await SecureStore.setItemAsync('authToken', 'jwt-token-here', {
+    requireAuthentication: false,           // set true for biometric requirement
+    keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+});
+
+// Retrieve
+const token = await SecureStore.getItemAsync('authToken');
+
+// Delete
+await SecureStore.deleteItemAsync('authToken');
+
+// Check availability (secure store may not be available in all environments)
+const isAvailable = await SecureStore.isAvailableAsync();
+```
+
+| | expo-secure-store | react-native-keychain |
+|--|------------------|-----------------------|
+| Max value size | 2KB | Much larger |
+| API complexity | Simple | More options |
+| Expo managed | ✅ Yes | ❌ No |
+| Biometric options | Basic | Comprehensive |
+| Credential pair | ❌ (just key-value) | ✅ (username + password) |
+| iOS Keychain groups | ❌ | ✅ |
+
+```js
+// For production apps with < 2KB per item and Expo:
+// expo-secure-store is sufficient
+
+// For production apps needing:
+// - Larger values
+// - Keychain sharing between apps
+// - Fine-grained biometric control
+// → use react-native-keychain
+```
+
+---
+
+### Q458. How do you implement a secure token storage pattern?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Very High | **Category:** Secure Storage Pattern
+
+**Answer:**
+```typescript
+// src/auth/TokenStorage.ts — production token storage
+import * as Keychain from 'react-native-keychain';
+import { MMKV } from 'react-native-mmkv';
+
+const KEYCHAIN_SERVICE = 'com.yourapp.tokens';
+const mmkv = new MMKV();
+
+export const TokenStorage = {
+    // Store tokens securely
+    async saveTokens(accessToken: string, refreshToken: string): Promise<void> {
+        // Access token → Keychain (encrypted, hardware-backed)
+        await Keychain.setGenericPassword(
+            'access_token',
+            accessToken,
+            {
+                service: `${KEYCHAIN_SERVICE}.access`,
+                accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+            }
+        );
+
+        // Refresh token → Keychain with stronger protection
+        await Keychain.setGenericPassword(
+            'refresh_token',
+            refreshToken,
+            {
+                service: `${KEYCHAIN_SERVICE}.refresh`,
+                accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+            }
+        );
+
+        // Cache access token in MMKV for fast synchronous reads
+        // (Keychain reads are ~5-20ms, MMKV is <0.1ms)
+        mmkv.set('access_token_cache', accessToken);
+        mmkv.set('token_expiry', Date.now() + 15 * 60 * 1000); // 15 min
+    },
+
+    // Fast synchronous read for most API calls
+    getAccessTokenSync(): string | null {
+        const expiry = mmkv.getNumber('token_expiry') ?? 0;
+        if (Date.now() > expiry) return null; // expired — must refresh
+        return mmkv.getString('access_token_cache');
+    },
+
+    // Secure async read (fallback or on refresh)
+    async getAccessToken(): Promise<string | null> {
+        // Try fast cache first
+        const cached = this.getAccessTokenSync();
+        if (cached) return cached;
+
+        // Fall back to Keychain
+        const result = await Keychain.getGenericPassword({
+            service: `${KEYCHAIN_SERVICE}.access`,
+        });
+        return result ? result.password : null;
+    },
+
+    async getRefreshToken(): Promise<string | null> {
+        const result = await Keychain.getGenericPassword({
+            service: `${KEYCHAIN_SERVICE}.refresh`,
+        });
+        return result ? result.password : null;
+    },
+
+    // On logout — clear everything
+    async clearTokens(): Promise<void> {
+        await Promise.all([
+            Keychain.resetGenericPassword({ service: `${KEYCHAIN_SERVICE}.access` }),
+            Keychain.resetGenericPassword({ service: `${KEYCHAIN_SERVICE}.refresh` }),
+        ]);
+        mmkv.delete('access_token_cache');
+        mmkv.delete('token_expiry');
+    },
+};
+```
+
+---
+
+### Q459. How do you implement offline data storage with WatermelonDB?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** SQLite / WatermelonDB
+
+**Answer:**
+WatermelonDB is a high-performance reactive database for React Native, built on SQLite. Perfect for complex ERP-style offline data.
+
+```bash
+npm install @nozbe/watermelondb
+npx pod-install  # iOS
+```
+
+```js
+// src/database/schema.ts — define your data model
+import { appSchema, tableSchema } from '@nozbe/watermelondb';
+
+export const schema = appSchema({
+    version: 1,
+    tables: [
+        tableSchema({
+            name: 'employees',
+            columns: [
+                { name: 'name', type: 'string' },
+                { name: 'email', type: 'string' },
+                { name: 'department_id', type: 'string', isIndexed: true },
+                { name: 'salary', type: 'number' },
+                { name: 'is_active', type: 'boolean' },
+                { name: 'created_at', type: 'number' },
+                { name: 'updated_at', type: 'number' },
+            ],
+        }),
+        tableSchema({
+            name: 'attendance',
+            columns: [
+                { name: 'employee_id', type: 'string', isIndexed: true },
+                { name: 'check_in', type: 'number' },
+                { name: 'check_out', type: 'number', isOptional: true },
+                { name: 'date', type: 'string', isIndexed: true },
+                { name: 'status', type: 'string' },
+            ],
+        }),
+    ],
+});
+
+// src/database/Employee.ts — model class
+import { Model, field, children, writer, lazy } from '@nozbe/watermelondb/decorators';
+import { relation } from '@nozbe/watermelondb';
+
+class Employee extends Model {
+    static table = 'employees';
+    static associations = {
+        attendance: { type: 'has_many', foreignKey: 'employee_id' },
+    };
+
+    @field('name') name: string;
+    @field('email') email: string;
+    @field('department_id') departmentId: string;
+    @field('salary') salary: number;
+    @field('is_active') isActive: boolean;
+
+    @children('attendance') attendanceRecords: Query<Attendance>;
+
+    @writer async deactivate() {
+        await this.update(record => { record.isActive = false; });
+    }
+
+    @lazy thisMonthAttendance = this.attendanceRecords
+        .extend(Q.where('date', Q.gte(startOfMonth()), Q.lte(endOfMonth())));
+}
+
+// src/database/index.ts — database setup
+import { Database } from '@nozbe/watermelondb';
+import SQLiteAdapter from '@nozbe/watermelondb/adapters/sqlite';
+
+const adapter = new SQLiteAdapter({
+    schema,
+    migrations,      // handle schema upgrades
+    jsi: true,       // use JSI for 2× faster queries
+    onSetUpError: error => {
+        console.error('DB setup failed:', error);
+    },
+});
+
+export const database = new Database({
+    adapter,
+    modelClasses: [Employee, Attendance, Department],
+});
+```
+
+```js
+// src/hooks/useEmployees.ts — reactive queries
+import { withDatabase, withObservables } from '@nozbe/watermelondb/react';
+import { Q } from '@nozbe/watermelondb';
+
+// Observe active employees in Engineering (auto-updates when DB changes)
+const useActiveEmployees = (departmentId) => {
+    const [employees, setEmployees] = useState([]);
+
+    useEffect(() => {
+        const subscription = database
+            .get('employees')
+            .query(
+                Q.where('department_id', departmentId),
+                Q.where('is_active', true),
+                Q.sortBy('name', Q.asc),
+            )
+            .observe()
+            .subscribe(setEmployees);
+
+        return () => subscription.unsubscribe();
+    }, [departmentId]);
+
+    return employees;
+};
+
+// Write operations — batched for performance
+const syncEmployeesFromServer = async (serverData) => {
+    await database.write(async () => {
+        await database.batch(
+            ...serverData.map(emp =>
+                database.get('employees').prepareCreate(record => {
+                    record._raw.id = emp.id;
+                    record.name = emp.name;
+                    record.email = emp.email;
+                    record.salary = emp.salary;
+                    record.isActive = emp.is_active;
+                })
+            )
+        );
+    });
+};
+```
+
+---
+
+### Q460. How do you sync local SQLite with a remote server?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Offline Sync
+
+**Answer:**
+```js
+// Sync strategy: last-write-wins with server timestamp
+
+// Schema addition for sync
+// Each table needs: _status, _changed columns (WatermelonDB sync adds these)
+// or manual: 'server_id', 'synced_at', 'is_deleted', 'version'
+
+import { synchronize } from '@nozbe/watermelondb/sync';
+
+const syncDatabase = async () => {
+    await synchronize({
+        database,
+
+        // Step 1: pull changes from server (since last sync)
+        pullChanges: async ({ lastPulledAt }) => {
+            const { data } = await api.get('/sync/pull', {
+                params: {
+                    last_pulled_at: lastPulledAt,   // Unix timestamp
+                    // Server returns only records changed since this time
+                }
+            });
+
+            return {
+                changes: data.changes,
+                // Format expected by WatermelonDB:
+                // { employees: { created: [...], updated: [...], deleted: ['id1', 'id2'] } }
+                timestamp: data.timestamp,     // server timestamp of this pull
+            };
+        },
+
+        // Step 2: push local changes to server
+        pushChanges: async ({ changes, lastPulledAt }) => {
+            await api.post('/sync/push', { changes, lastPulledAt });
+            // Server applies changes and resolves conflicts
+            // Conflict resolution: server-wins by default (simplest)
+            // Or: field-level merging for complex cases
+        },
+
+        // Called when a record is deleted locally
+        // Use soft-delete (is_deleted flag) for sync, then hard-delete after confirmed
+        sendReadyForCleanup: async (ids) => {
+            // Server confirms deletion — safe to hard delete locally
+            await database.write(async () => {
+                for (const id of ids) {
+                    const record = await database.get('employees').find(id);
+                    await record.destroyPermanently();
+                }
+            });
+        },
+    });
+};
+
+// Sync on app foreground
+const setupSync = () => {
+    const sub = AppState.addEventListener('change', async (state) => {
+        if (state === 'active') {
+            const isOnline = await NetInfo.fetch().then(s => s.isConnected);
+            if (isOnline) await syncDatabase();
+        }
+    });
+    return () => sub.remove();
+};
+
+// Handle sync conflicts (advanced)
+// Conflict: same record changed locally AND on server since last pull
+// Strategy 1: server-wins (simplest — implement in pullChanges)
+// Strategy 2: client-wins (risky)
+// Strategy 3: field-level merge (complex but fair)
+const mergeConflict = (local, server) => ({
+    ...server,                           // start with server version
+    local_notes: local.local_notes,     // keep fields that only exist locally
+});
+```
+
+---
+
+### Q461. What is `react-native-permissions` and how do you use it?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Permissions
+
+**Answer:**
+```bash
+npx expo install react-native-permissions
+# OR for bare:
+npm install react-native-permissions
+```
+
+```js
+import {
+    check, request, requestMultiple,
+    PERMISSIONS, RESULTS, openSettings
+} from 'react-native-permissions';
+
+// Permission statuses:
+// RESULTS.UNAVAILABLE  — device doesn't support this permission
+// RESULTS.DENIED       — not yet asked (ask will show dialog)
+// RESULTS.LIMITED      — iOS: granted with limitations (photo library)
+// RESULTS.GRANTED      — user allowed
+// RESULTS.BLOCKED      — user denied and selected "Don't ask again" → must open Settings
+
+// Check current status (doesn't ask user)
+const status = await check(
+    Platform.OS === 'ios'
+        ? PERMISSIONS.IOS.CAMERA
+        : PERMISSIONS.ANDROID.CAMERA
+);
+
+// Request permission (shows OS dialog first time)
+const result = await request(
+    Platform.OS === 'ios'
+        ? PERMISSIONS.IOS.CAMERA
+        : PERMISSIONS.ANDROID.CAMERA
+);
+
+if (result === RESULTS.GRANTED) {
+    // open camera
+} else if (result === RESULTS.BLOCKED) {
+    // show "Go to Settings" dialog
+    Alert.alert(
+        'Camera permission required',
+        'Please enable camera access in Settings to scan QR codes.',
+        [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: openSettings },
+        ]
+    );
+}
+
+// Request multiple at once
+const statuses = await requestMultiple([
+    PERMISSIONS.IOS.CAMERA,
+    PERMISSIONS.IOS.MICROPHONE,
+    PERMISSIONS.IOS.LOCATION_WHEN_IN_USE,
+]);
+
+const allGranted = Object.values(statuses).every(s => s === RESULTS.GRANTED);
+```
+
+---
+
+### Q462. How do you implement a reusable permission hook?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Permissions
+
+**Answer:**
+```typescript
+// src/hooks/usePermission.ts
+import { useState, useCallback } from 'react';
+import {
+    check, request, openSettings,
+    Permission, PermissionStatus, RESULTS
+} from 'react-native-permissions';
+import { Alert, Platform } from 'react-native';
+
+type PermissionConfig = {
+    ios: Permission;
+    android: Permission;
+    title: string;             // for the Settings alert
+    message: string;           // explanation of why you need it
+    settingsMessage?: string;  // message when blocked
+};
+
+const usePermission = (config: PermissionConfig) => {
+    const [status, setStatus] = useState<PermissionStatus | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
+
+    const permission = Platform.OS === 'ios' ? config.ios : config.android;
+
+    const checkPermission = useCallback(async (): Promise<PermissionStatus> => {
+        const result = await check(permission);
+        setStatus(result);
+        return result;
+    }, [permission]);
+
+    const requestPermission = useCallback(async (): Promise<boolean> => {
+        setIsLoading(true);
+        try {
+            // First check current status
+            const current = await check(permission);
+
+            if (current === RESULTS.GRANTED || current === RESULTS.LIMITED) {
+                setStatus(current);
+                return true;
+            }
+
+            if (current === RESULTS.BLOCKED) {
+                // Can't request again — must go to Settings
+                Alert.alert(
+                    config.title,
+                    config.settingsMessage || `Please enable ${config.title} in Settings.`,
+                    [
+                        { text: 'Not Now', style: 'cancel' },
+                        { text: 'Open Settings', onPress: openSettings },
+                    ]
+                );
+                return false;
+            }
+
+            // DENIED — show request dialog
+            const result = await request(permission);
+            setStatus(result);
+
+            if (result === RESULTS.BLOCKED) {
+                Alert.alert(
+                    config.title,
+                    config.settingsMessage || `Please enable ${config.title} in Settings.`,
+                    [
+                        { text: 'Not Now', style: 'cancel' },
+                        { text: 'Open Settings', onPress: openSettings },
+                    ]
+                );
+                return false;
+            }
+
+            return result === RESULTS.GRANTED || result === RESULTS.LIMITED;
+        } finally {
+            setIsLoading(false);
+        }
+    }, [permission, config]);
+
+    return { status, isLoading, checkPermission, requestPermission };
+};
+
+// Pre-configured permission hooks
+export const useCameraPermission = () =>
+    usePermission({
+        ios: PERMISSIONS.IOS.CAMERA,
+        android: PERMISSIONS.ANDROID.CAMERA,
+        title: 'Camera Access',
+        message: 'Camera is needed to scan attendance QR codes.',
+        settingsMessage: 'Camera access was denied. Enable it in Settings to scan QR codes.',
+    });
+
+export const useLocationPermission = () =>
+    usePermission({
+        ios: PERMISSIONS.IOS.LOCATION_WHEN_IN_USE,
+        android: PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION,
+        title: 'Location Access',
+        message: 'Location is used for attendance geo-fencing.',
+        settingsMessage: 'Location access was denied. Enable it in Settings.',
+    });
+
+// Usage
+const AttendanceScreen = () => {
+    const { status, requestPermission } = useCameraPermission();
+
+    const handleQRScan = async () => {
+        const granted = await requestPermission();
+        if (granted) openQRScanner();
+    };
+
+    return (
+        <Button
+            title={status === 'granted' ? 'Scan QR' : 'Enable Camera & Scan'}
+            onPress={handleQRScan}
+        />
+    );
+};
+```
+
+---
+
+### Q463. How do you handle location permissions for background tracking?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Location Permissions
+
+**Answer:**
+```js
+// Background location requires two-step permission (iOS requires "always" authorization)
+
+import { check, request, PERMISSIONS, RESULTS, openSettings } from 'react-native-permissions';
+
+const requestBackgroundLocation = async () => {
+    if (Platform.OS === 'ios') {
+        // iOS: must grant "When in use" FIRST, then "Always"
+        // Step 1: "When in use" permission
+        const whenInUse = await check(PERMISSIONS.IOS.LOCATION_WHEN_IN_USE);
+        if (whenInUse !== RESULTS.GRANTED) {
+            const result = await request(PERMISSIONS.IOS.LOCATION_WHEN_IN_USE);
+            if (result !== RESULTS.GRANTED) return false;
+        }
+
+        // Step 2: Upgrade to "Always" (background)
+        const always = await check(PERMISSIONS.IOS.LOCATION_ALWAYS);
+        if (always === RESULTS.GRANTED) return true;
+
+        if (always === RESULTS.DENIED) {
+            // Show rationale before requesting
+            const shouldAsk = await new Promise(resolve =>
+                Alert.alert(
+                    'Background Location',
+                    'To track field attendance, we need access to your location even when the app is in background. Please select "Always" when prompted.',
+                    [
+                        { text: 'Not Now', onPress: () => resolve(false) },
+                        { text: 'Continue', onPress: () => resolve(true) },
+                    ]
+                )
+            );
+            if (!shouldAsk) return false;
+
+            const result = await request(PERMISSIONS.IOS.LOCATION_ALWAYS);
+            return result === RESULTS.GRANTED;
+        }
+
+        if (always === RESULTS.BLOCKED) {
+            openSettings(); // go to Settings to change
+            return false;
+        }
+    }
+
+    if (Platform.OS === 'android') {
+        // Android 10+: "Fine location" first, then "Background location"
+        const fine = await request(PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION);
+        if (fine !== RESULTS.GRANTED) return false;
+
+        // Android 10+ (API 29+): requires separate background permission
+        if (Platform.Version >= 29) {
+            // Show rationale — Google Play requires explanation before this request
+            Alert.alert(
+                'Background Location',
+                'Select "Allow all the time" on the next screen for attendance tracking.',
+                [{ text: 'OK', onPress: async () => {
+                    const bg = await request(PERMISSIONS.ANDROID.ACCESS_BACKGROUND_LOCATION);
+                    return bg === RESULTS.GRANTED;
+                }}]
+            );
+        }
+        return true;
+    }
+    return false;
+};
+```
+
+---
+
+### Q464. How do you request camera and microphone permissions together?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Permissions
+
+**Answer:**
+```js
+import { requestMultiple, checkMultiple, PERMISSIONS, RESULTS } from 'react-native-permissions';
+
+const requestMediaPermissions = async () => {
+    const permissions = Platform.OS === 'ios'
+        ? [PERMISSIONS.IOS.CAMERA, PERMISSIONS.IOS.MICROPHONE]
+        : [PERMISSIONS.ANDROID.CAMERA, PERMISSIONS.ANDROID.RECORD_AUDIO];
+
+    // Check first to see what's already granted
+    const statuses = await checkMultiple(permissions);
+
+    const notGranted = Object.entries(statuses)
+        .filter(([_, status]) => status !== RESULTS.GRANTED)
+        .map(([permission]) => permission as Permission);
+
+    if (notGranted.length === 0) return true; // all already granted
+
+    // Request only what's needed
+    const results = await requestMultiple(notGranted);
+
+    const allGranted = Object.values(results)
+        .every(s => s === RESULTS.GRANTED);
+
+    if (!allGranted) {
+        const blocked = Object.values(results).some(s => s === RESULTS.BLOCKED);
+        if (blocked) {
+            Alert.alert(
+                'Permissions Required',
+                'Camera and microphone access are needed for video calls. Please enable them in Settings.',
+                [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Open Settings', onPress: openSettings },
+                ]
+            );
+        }
+        return false;
+    }
+    return true;
+};
+
+// Video call component
+const VideoCallScreen = () => {
+    const [permissionsGranted, setPermissionsGranted] = useState(false);
+
+    useEffect(() => {
+        requestMediaPermissions().then(setPermissionsGranted);
+    }, []);
+
+    if (!permissionsGranted) {
+        return <PermissionExplainer onRetry={() => requestMediaPermissions().then(setPermissionsGranted)} />;
+    }
+
+    return <VideoCallView />;
+};
+```
+
+---
+
+### Q465. How do you handle the photo library permission on iOS (limited access)?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** iOS Permissions
+
+**Answer:**
+iOS 14+ introduced "Limited Access" for photo library — users can grant access to specific photos only (not all).
+
+```js
+import {
+    check, request, PERMISSIONS, RESULTS, openLimitedPhotoLibraryPicker
+} from 'react-native-permissions';
+
+const handlePhotoAccess = async () => {
+    const status = await check(PERMISSIONS.IOS.PHOTO_LIBRARY);
+
+    switch (status) {
+        case RESULTS.GRANTED:
+            // Full access — show full gallery
+            openFullGallery();
+            break;
+
+        case RESULTS.LIMITED:
+            // User selected specific photos — work with those
+            // Show option to expand selection
+            Alert.alert(
+                'Limited Photo Access',
+                'You\'ve given access to specific photos only.',
+                [
+                    {
+                        text: 'Use Selected Photos',
+                        onPress: openGalleryWithLimitedPhotos,
+                    },
+                    {
+                        text: 'Select More Photos',
+                        onPress: async () => {
+                            // Opens iOS photo picker to expand selection
+                            await openLimitedPhotoLibraryPicker();
+                        },
+                    },
+                    {
+                        text: 'Allow Full Access',
+                        onPress: openSettings,
+                    },
+                ]
+            );
+            break;
+
+        case RESULTS.DENIED:
+            // First time or was denied — can request
+            const result = await request(PERMISSIONS.IOS.PHOTO_LIBRARY);
+            if (result === RESULTS.GRANTED) openFullGallery();
+            else if (result === RESULTS.LIMITED) openGalleryWithLimitedPhotos();
+            break;
+
+        case RESULTS.BLOCKED:
+            // User permanently denied — go to Settings
+            Alert.alert(
+                'Photo Library Access Blocked',
+                'Please allow photo access in Settings.',
+                [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Open Settings', onPress: openSettings },
+                ]
+            );
+            break;
+    }
+};
+
+// Add to Info.plist:
+// NSPhotoLibraryUsageDescription — for read access
+// NSPhotoLibraryAddUsageDescription — for write-only access
+```
+
+---
+
+### Q466. How do you handle notification permissions across platforms?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Notification Permissions
+
+**Answer:**
+```js
+import { PermissionsAndroid, Platform } from 'react-native';
+import { check, request, PERMISSIONS, RESULTS } from 'react-native-permissions';
+
+const requestNotificationPermission = async (): Promise<boolean> => {
+    if (Platform.OS === 'ios') {
+        // iOS — always requires explicit permission
+        const { status } = await Notifications.requestPermissionsAsync({
+            ios: {
+                allowAlert: true,
+                allowBadge: true,
+                allowSound: true,
+                allowAnnouncements: true,
+            },
+        });
+        return status === 'granted';
+    }
+
+    if (Platform.OS === 'android') {
+        // Android < 13 (API 33) — permission not required
+        if (Number(Platform.Version) < 33) return true;
+
+        // Android 13+ — POST_NOTIFICATIONS permission required
+        const status = await check(PERMISSIONS.ANDROID.POST_NOTIFICATIONS);
+
+        if (status === RESULTS.GRANTED) return true;
+
+        if (status === RESULTS.DENIED) {
+            const result = await request(PERMISSIONS.ANDROID.POST_NOTIFICATIONS);
+            return result === RESULTS.GRANTED;
+        }
+
+        if (status === RESULTS.BLOCKED) {
+            // Show "go to Settings" dialog
+            Alert.alert(
+                'Notifications Disabled',
+                'Enable notifications in Settings to receive attendance reminders and payroll alerts.',
+                [
+                    { text: 'Not Now', style: 'cancel' },
+                    { text: 'Open Settings', onPress: openSettings },
+                ]
+            );
+            return false;
+        }
+    }
+    return false;
+};
+
+// Show notification permission rationale before requesting
+// Best practice: explain WHY before the OS dialog appears
+const NotificationPermissionModal = ({ onAccept, onDecline }) => (
+    <Modal>
+        <View>
+            <Text>Get important updates</Text>
+            <Text>
+                We'll notify you about:
+                {'\n'}• Attendance reminders
+                {'\n'}• Leave request approvals
+                {'\n'}• Payroll processing
+                {'\n'}• Shift changes
+            </Text>
+            <Button title="Enable Notifications" onPress={onAccept} />
+            <Button title="Not Now" onPress={onDecline} />
+        </View>
+    </Modal>
+);
+```
+
+---
+
+### Q467. What is the permission lifecycle and how do you check permission status on app foreground?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Permission Lifecycle
+
+**Answer:**
+```
+Permission status lifecycle:
+
+UNAVAILABLE → device doesn't support
+     ↓
+DENIED (initial) → user hasn't been asked yet
+     ↓ request()
+OS dialog: "Allow / Deny"
+     ↓                    ↓
+  GRANTED              DENIED (once)
+                          ↓ request() again
+                    "Don't Ask Again" on Android
+                          ↓
+                       BLOCKED → must go to Settings
+```
+
+```js
+// Re-check permissions when app returns to foreground
+// (User may have changed permissions in Settings)
+import { AppState } from 'react-native';
+import { check, PERMISSIONS } from 'react-native-permissions';
+
+const usePermissionSync = () => {
+    const [cameraStatus, setCameraStatus] = useState(null);
+
+    // Check on mount
+    useEffect(() => {
+        const checkPermissions = async () => {
+            const camera = await check(
+                Platform.OS === 'ios' ? PERMISSIONS.IOS.CAMERA : PERMISSIONS.ANDROID.CAMERA
+            );
+            setCameraStatus(camera);
+        };
+        checkPermissions();
+    }, []);
+
+    // Re-check when app comes to foreground
+    useEffect(() => {
+        const sub = AppState.addEventListener('change', async (state) => {
+            if (state === 'active') {
+                // User may have just come back from Settings
+                const camera = await check(
+                    Platform.OS === 'ios' ? PERMISSIONS.IOS.CAMERA : PERMISSIONS.ANDROID.CAMERA
+                );
+                setCameraStatus(camera);
+            }
+        });
+        return () => sub.remove();
+    }, []);
+
+    return { cameraStatus };
+};
+
+// In-app permission settings screen
+// Show current permission statuses with "Open Settings" buttons
+const PermissionsSettingsScreen = () => {
+    const { status: cameraStatus } = useCameraPermission();
+    const { status: locationStatus } = useLocationPermission();
+
+    return (
+        <View>
+            <PermissionRow
+                title="Camera"
+                description="Scan attendance QR codes"
+                status={cameraStatus}
+                onPress={() => cameraStatus === 'blocked' ? openSettings() : requestCameraPermission()}
+            />
+            <PermissionRow
+                title="Location"
+                description="Geo-fenced attendance"
+                status={locationStatus}
+                onPress={() => locationStatus === 'blocked' ? openSettings() : requestLocationPermission()}
+            />
+        </View>
+    );
+};
+```
+
+---
+
+### Q468. How do you handle permissions for Bluetooth in React Native?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Bluetooth Permissions
+
+**Answer:**
+```js
+// Bluetooth permissions changed significantly in Android 12 (API 31)
+import { requestMultiple, PERMISSIONS, RESULTS } from 'react-native-permissions';
+
+const requestBluetoothPermissions = async (): Promise<boolean> => {
+    if (Platform.OS === 'ios') {
+        // iOS 13+ — single permission
+        const result = await request(PERMISSIONS.IOS.BLUETOOTH);
+        return result === RESULTS.GRANTED;
+    }
+
+    if (Platform.OS === 'android') {
+        if (Platform.Version >= 31) {
+            // Android 12+ — BLUETOOTH_SCAN, BLUETOOTH_CONNECT (new permissions)
+            const results = await requestMultiple([
+                PERMISSIONS.ANDROID.BLUETOOTH_SCAN,
+                PERMISSIONS.ANDROID.BLUETOOTH_CONNECT,
+                PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION, // still needed for BLE scanning
+            ]);
+
+            return Object.values(results).every(s => s === RESULTS.GRANTED);
+        } else {
+            // Android < 12 — legacy permissions
+            const results = await requestMultiple([
+                PERMISSIONS.ANDROID.BLUETOOTH,
+                PERMISSIONS.ANDROID.BLUETOOTH_ADMIN,
+                PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION, // required for BLE discovery
+            ]);
+
+            return Object.values(results).every(s => s === RESULTS.GRANTED);
+        }
+    }
+    return false;
+};
+
+// AndroidManifest.xml additions required:
+// <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+// <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+// <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+// <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+// <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+// <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+```
+
+---
+
+### Q469. How do you store large files (PDFs, images) in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** File Storage
+
+**Answer:**
+```bash
+npm install react-native-fs
+npx pod-install
+```
+
+```js
+import RNFS from 'react-native-fs';
+
+// File system paths
+const PATHS = {
+    // Persistent across app updates, user-accessible (iOS Files app)
+    documents: RNFS.DocumentDirectoryPath,
+    // Cleared on low storage, app updates, OS cleanup
+    cache: RNFS.CachesDirectoryPath,
+    // Temporary, may be deleted by OS anytime
+    temp: RNFS.TemporaryDirectoryPath,
+    // External storage (Android only, SD card)
+    external: RNFS.ExternalDirectoryPath,
+};
+
+// Download a PDF payslip
+const downloadPayslip = async (url: string, fileName: string) => {
+    const destPath = `${RNFS.DocumentDirectoryPath}/payslips/${fileName}`;
+
+    // Create directory if needed
+    await RNFS.mkdir(`${RNFS.DocumentDirectoryPath}/payslips`);
+
+    const result = await RNFS.downloadFile({
+        fromUrl: url,
+        toFile: destPath,
+        headers: { Authorization: `Bearer ${token}` },
+        progress: (res) => {
+            const progress = res.bytesWritten / res.contentLength;
+            setDownloadProgress(progress);
+        },
+        progressInterval: 100,
+    }).promise;
+
+    if (result.statusCode === 200) {
+        console.log('Downloaded to:', destPath);
+        return destPath;
+    }
+    throw new Error(`Download failed: ${result.statusCode}`);
+};
+
+// Read a file
+const readFile = async (path: string): Promise<string> => {
+    return RNFS.readFile(path, 'utf8');
+};
+
+// Read as base64 (for sending to API or displaying image)
+const readFileBase64 = async (path: string): Promise<string> => {
+    return RNFS.readFile(path, 'base64');
+};
+
+// Write a file
+const writeFile = async (path: string, content: string): Promise<void> => {
+    await RNFS.writeFile(path, content, 'utf8');
+};
+
+// Check if file exists
+const fileExists = async (path: string): Promise<boolean> => {
+    return RNFS.exists(path);
+};
+
+// Delete a file
+const deleteFile = async (path: string): Promise<void> => {
+    if (await RNFS.exists(path)) {
+        await RNFS.unlink(path);
+    }
+};
+
+// List files in directory
+const listPayslips = async (): Promise<RNFS.ReadDirItem[]> => {
+    const payslipsDir = `${RNFS.DocumentDirectoryPath}/payslips`;
+    if (!(await RNFS.exists(payslipsDir))) return [];
+    return RNFS.readDir(payslipsDir);
+};
+
+// Share a file (native share sheet)
+import Share from 'react-native-share';
+
+const sharePayslip = async (filePath: string, month: string) => {
+    await Share.open({
+        title: `Payslip - ${month}`,
+        url: `file://${filePath}`,
+        type: 'application/pdf',
+        subject: `Your payslip for ${month}`,
+        message: 'Please find your payslip attached.',
+    });
+};
+```
+
+---
+
+### Q470. How do you implement secure data encryption beyond Keychain?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Data Security
+
+**Answer:**
+```js
+// For encrypting large data (documents, local DB) not just credentials
+
+// Option 1: MMKV with encryption key
+import { MMKV } from 'react-native-mmkv';
+
+// Derive encryption key from device + user-specific secret
+// Never hardcode the key!
+const deriveEncryptionKey = async (userId: string): Promise<string> => {
+    // Get hardware-backed unique device ID
+    const deviceId = await DeviceInfo.getUniqueId();
+    // Combine with user ID + app secret
+    const rawKey = `${deviceId}-${userId}-${APP_SECRET}`;
+    // Hash to get 32-byte key
+    return sha256(rawKey).slice(0, 32);
+};
+
+const getSecureStorage = async (userId: string) => {
+    const key = await deriveEncryptionKey(userId);
+    return new MMKV({ id: `user-${userId}`, encryptionKey: key });
+};
+
+// Option 2: Encrypt file content before writing
+import { RSA, AES } from 'react-native-rsa-native'; // or react-native-crypto
+
+const encryptAndSave = async (data: string, path: string): Promise<void> => {
+    const encryptionKey = await getEncryptionKey();
+
+    // AES-256 encrypt
+    const encrypted = await AES.encrypt(data, encryptionKey);
+    await RNFS.writeFile(path, encrypted, 'utf8');
+};
+
+const readAndDecrypt = async (path: string): Promise<string> => {
+    const encryptionKey = await getEncryptionKey();
+    const encrypted = await RNFS.readFile(path, 'utf8');
+    return AES.decrypt(encrypted, encryptionKey);
+};
+
+// Option 3: SQLCipher (encrypted SQLite)
+// WatermelonDB supports SQLCipher adapter
+import SQLiteAdapter from '@nozbe/watermelondb/adapters/sqlite';
+
+const adapter = new SQLiteAdapter({
+    schema,
+    dbName: 'MyApp',
+    // SQLCipher key (derive from Keychain-stored secret)
+    // Not standard WatermelonDB — requires custom native implementation
+});
+
+// Security checklist for production:
+// ✅ Tokens → Keychain/MMKV encrypted
+// ✅ User preferences → MMKV encrypted
+// ✅ Local DB → SQLCipher
+// ✅ Files → AES encrypted before writing
+// ✅ Network → TLS + certificate pinning
+// ✅ Deep links → validate and sanitise params
+// ✅ Screenshot prevention (for sensitive screens)
+```
+
+---
+
+### Q471. How do you prevent screenshots on sensitive screens?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Security
+
+**Answer:**
+```js
+// react-native-screenshot-prevent
+import RNScreenshotPrevent from 'react-native-screenshot-prevent';
+
+// Enable on mount, disable on unmount
+useEffect(() => {
+    RNScreenshotPrevent.enabled(true);
+    return () => RNScreenshotPrevent.enabled(false);
+}, []);
+
+// iOS: Prevents screenshot AND screen recording
+// Android: FLAG_SECURE — prevents screenshot, shows black in app switcher
+
+// More granular with react-native-flag-secure (Android)
+import { enableScreenRecord } from 'react-native-flag-secure';
+
+// Only on sensitive screens (payment, salary details)
+const PayslipScreen = () => {
+    useEffect(() => {
+        enableScreenRecord(false); // block screenshots
+        return () => enableScreenRecord(true); // re-enable on leave
+    }, []);
+    // ...
+};
+
+// Expo alternative
+import { preventAutoHideAsync } from 'expo-splash-screen';
+// expo doesn't have this natively — use SecureView from community
+
+// iOS additional: prevent screen capture in iOS native
+// UIApplication.shared.connectedScenes.first?.windows.first
+//   .isUserInteractionEnabled = false
+
+// Detect screenshot was taken (react and blur sensitive data)
+import { useScreenshotDetector } from 'react-native-screenshot-detect';
+
+const PaymentDetails = () => {
+    const [isBlurred, setIsBlurred] = useState(false);
+
+    useScreenshotDetector(() => {
+        setIsBlurred(true);
+        Alert.alert('Screenshot detected', 'Payment details have been hidden for security.');
+        setTimeout(() => setIsBlurred(false), 3000);
+    });
+
+    return (
+        <View>
+            {isBlurred ? (
+                <View style={styles.blurred} />
+            ) : (
+                <CardNumber number={card.number} />
+            )}
+        </View>
+    );
+};
+```
+
+---
+
+### Q472. How do you implement a permissions flow for a feature that needs multiple permissions?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Permissions UX
+
+**Answer:**
+```js
+// Feature: Field Attendance (requires camera + location + microphone for video check-in)
+
+type PermissionFlowStep = 'camera' | 'location' | 'microphone' | 'complete' | 'denied';
+
+const useFieldAttendancePermissions = () => {
+    const [step, setStep] = useState<PermissionFlowStep>('camera');
+    const [deniedPermissions, setDeniedPermissions] = useState<string[]>([]);
+
+    const requestNext = async () => {
+        switch (step) {
+            case 'camera': {
+                const granted = await requestPermission(CAMERA_CONFIG);
+                if (granted) {
+                    setStep('location');
+                } else {
+                    setDeniedPermissions(p => [...p, 'Camera']);
+                    setStep('location'); // continue to next even if denied
+                }
+                break;
+            }
+            case 'location': {
+                const granted = await requestPermission(LOCATION_CONFIG);
+                if (!granted) setDeniedPermissions(p => [...p, 'Location']);
+                setStep('microphone');
+                break;
+            }
+            case 'microphone': {
+                const granted = await requestPermission(MICROPHONE_CONFIG);
+                if (!granted) setDeniedPermissions(p => [...p, 'Microphone']);
+                setStep('complete');
+                break;
+            }
+        }
+    };
+
+    const allGranted = step === 'complete' && deniedPermissions.length === 0;
+    const someGranted = step === 'complete' && deniedPermissions.length < 3;
+
+    return { step, deniedPermissions, requestNext, allGranted, someGranted };
+};
+
+// Progressive permission request UI
+const FieldAttendanceSetup = ({ onComplete }) => {
+    const { step, requestNext, allGranted, someGranted, deniedPermissions } = useFieldAttendancePermissions();
+
+    const STEPS = {
+        camera: {
+            icon: '📷',
+            title: 'Camera Access',
+            description: 'Take a photo to verify your attendance location',
+        },
+        location: {
+            icon: '📍',
+            title: 'Location Access',
+            description: 'Confirm you\'re within the designated attendance zone',
+        },
+        microphone: {
+            icon: '🎤',
+            title: 'Microphone Access',
+            description: 'Required for video-verified check-in',
+        },
+    };
+
+    if (step === 'complete') {
+        return (
+            <View>
+                {allGranted ? (
+                    <Text>✅ All permissions granted. You can now use field attendance.</Text>
+                ) : (
+                    <View>
+                        <Text>Some features may be limited:</Text>
+                        {deniedPermissions.map(p => <Text key={p}>❌ {p}</Text>)}
+                        <Button title="Open Settings to fix" onPress={openSettings} />
+                        <Button title="Continue with limited access" onPress={onComplete} />
+                    </View>
+                )}
+            </View>
+        );
+    }
+
+    const current = STEPS[step];
+    return (
+        <View>
+            <Text style={{ fontSize: 48 }}>{current.icon}</Text>
+            <Text>{current.title}</Text>
+            <Text>{current.description}</Text>
+            <Text>Step {Object.keys(STEPS).indexOf(step) + 1} of {Object.keys(STEPS).length}</Text>
+            <Button title="Allow Access" onPress={requestNext} />
+            <Button title="Skip" onPress={requestNext} />
+        </View>
+    );
+};
+```
+
+---
+
+### Q473. How does storage work differently between iOS and Android?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Platform Storage Differences
+
+**Answer:**
+```
+iOS Storage:                        Android Storage:
+──────────────────────────────────────────────────────────────────
+UserDefaults                        SharedPreferences
+→ AsyncStorage uses this            → AsyncStorage uses this
+→ Cleared on: app delete            → Cleared on: app uninstall
+                                      (unless android:allowBackup=true)
+
+Keychain                            Android Keystore
+→ Survives app reinstall!           → Tied to app install
+→ Shared between apps (groups)      → Each app isolated
+→ iCloud backup optional            → Backed up via Android backup
+
+Documents                           Internal Storage (/data/data/yourapp)
+→ Files app visible                 → App-private, not accessible externally
+→ Backed up by default              → Backed up with Android auto-backup
+
+Caches                              Cache (/data/data/yourapp/cache)
+→ NOT backed up                     → Android can clear on low storage
+→ May be cleared on low storage
+
+App Group containers                External Storage
+→ Share data between app + widgets  → Requires READ/WRITE_EXTERNAL_STORAGE
+→ Used for Today extensions         → Not available on all devices
+```
+
+```js
+// Cross-platform path handling
+const getDocumentsPath = () => {
+    if (Platform.OS === 'ios') {
+        return RNFS.DocumentDirectoryPath; // ~/Documents
+    }
+    return RNFS.DocumentDirectoryPath;    // /data/data/com.app/files
+};
+
+// iOS: Data survives app reinstall from same account (Keychain)
+// Android: Data cleared on uninstall (use allowBackup for Android Backup API)
+
+// Android backup configuration (AndroidManifest.xml)
+// <application android:allowBackup="true"
+//              android:fullBackupContent="@xml/backup_rules"
+// ...
+// res/xml/backup_rules.xml:
+// <full-backup-content>
+//   <exclude domain="sharedpref" path="secret_prefs"/>
+//   <include domain="database" path="employees.db"/>
+// </full-backup-content>
+```
+
+---
+
+### Q474. How do you implement data migration when app schema changes?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Storage Migration
+
+**Answer:**
+```js
+// WatermelonDB migrations
+// src/database/migrations.js
+
+import { schemaMigrations, createTable, addColumns } from '@nozbe/watermelondb/Schema/migrations';
+
+export const migrations = schemaMigrations({
+    migrations: [
+        // Migration from schema version 1 → 2
+        {
+            toVersion: 2,
+            steps: [
+                addColumns({
+                    table: 'employees',
+                    columns: [
+                        { name: 'middle_name', type: 'string', isOptional: true },
+                        { name: 'national_id', type: 'string', isOptional: true },
+                    ],
+                }),
+            ],
+        },
+        // Migration from version 2 → 3
+        {
+            toVersion: 3,
+            steps: [
+                createTable({
+                    name: 'leave_requests',
+                    columns: [
+                        { name: 'employee_id', type: 'string', isIndexed: true },
+                        { name: 'start_date', type: 'string' },
+                        { name: 'end_date', type: 'string' },
+                        { name: 'status', type: 'string' },
+                        { name: 'type', type: 'string' },
+                    ],
+                }),
+            ],
+        },
+    ],
+});
+
+// AsyncStorage migration pattern (for simpler key-value stores)
+const CURRENT_STORAGE_VERSION = 3;
+
+const runStorageMigrations = async () => {
+    const storedVersion = parseInt(
+        await AsyncStorage.getItem('storage_version') ?? '0', 10
+    );
+
+    if (storedVersion < 1) {
+        // Migration 0 → 1: rename 'user' key to 'current_user'
+        const user = await AsyncStorage.getItem('user');
+        if (user) {
+            await AsyncStorage.setItem('current_user', user);
+            await AsyncStorage.removeItem('user');
+        }
+    }
+
+    if (storedVersion < 2) {
+        // Migration 1 → 2: add default theme if missing
+        const theme = await AsyncStorage.getItem('theme');
+        if (!theme) await AsyncStorage.setItem('theme', 'system');
+    }
+
+    if (storedVersion < 3) {
+        // Migration 2 → 3: split token into access + refresh
+        const oldToken = await AsyncStorage.getItem('auth_token');
+        if (oldToken) {
+            // Old format was just the access token
+            await SecureStorage.setItem('access_token', oldToken);
+            await AsyncStorage.removeItem('auth_token'); // remove from insecure storage
+        }
+    }
+
+    await AsyncStorage.setItem('storage_version', String(CURRENT_STORAGE_VERSION));
+};
+
+// Call on app startup before rendering
+const App = () => {
+    const [migrationsComplete, setMigrationsComplete] = useState(false);
+
+    useEffect(() => {
+        runStorageMigrations().then(() => setMigrationsComplete(true));
+    }, []);
+
+    if (!migrationsComplete) return <SplashScreen />;
+    return <AppContent />;
+};
+```
+
+---
+
+### Q475. How do you implement a cache layer for API responses?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Caching Strategy
+
+**Answer:**
+```typescript
+// src/cache/ApiCache.ts — simple TTL-based API response cache
+import { MMKV } from 'react-native-mmkv';
+
+const cache = new MMKV({ id: 'api-cache' });
+
+interface CacheEntry<T> {
+    data: T;
+    timestamp: number;
+    ttl: number; // time-to-live in ms
+}
+
+export const ApiCache = {
+    set: <T>(key: string, data: T, ttlMs = 5 * 60 * 1000): void => {
+        const entry: CacheEntry<T> = {
+            data,
+            timestamp: Date.now(),
+            ttl: ttlMs,
+        };
+        cache.set(key, JSON.stringify(entry));
+    },
+
+    get: <T>(key: string): T | null => {
+        const stored = cache.getString(key);
+        if (!stored) return null;
+
+        try {
+            const entry: CacheEntry<T> = JSON.parse(stored);
+            if (Date.now() - entry.timestamp > entry.ttl) {
+                cache.delete(key); // expired — remove
+                return null;
+            }
+            return entry.data;
+        } catch {
+            cache.delete(key);
+            return null;
+        }
+    },
+
+    invalidate: (key: string): void => cache.delete(key),
+
+    invalidatePrefix: (prefix: string): void => {
+        cache.getAllKeys()
+            .filter(k => k.startsWith(prefix))
+            .forEach(k => cache.delete(k));
+    },
+
+    clear: (): void => cache.clearAll(),
+};
+
+// API service with caching
+export const fetchEmployees = async (deptId: string, force = false) => {
+    const cacheKey = `employees:${deptId}`;
+
+    if (!force) {
+        const cached = ApiCache.get<Employee[]>(cacheKey);
+        if (cached) return cached;
+    }
+
+    const response = await api.get(`/employees?dept=${deptId}`);
+    ApiCache.set(cacheKey, response.data, 10 * 60 * 1000); // 10 min TTL
+    return response.data;
+};
+
+// Cache invalidation on mutation
+export const createEmployee = async (employee: Partial<Employee>) => {
+    const result = await api.post('/employees', employee);
+    // Invalidate related caches
+    ApiCache.invalidatePrefix('employees:');
+    return result.data;
+};
+```
+
+---
+
+### Q476. How do you handle storage quota limits?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Storage Management
+
+**Answer:**
+```js
+import RNFS from 'react-native-fs';
+import DeviceInfo from 'react-native-device-info';
+
+// Check available storage
+const checkStorageSpace = async (): Promise<{
+    total: number;
+    free: number;
+    usedByApp: number;
+}> => {
+    const [freeDiskStorage, totalDiskCapacity] = await Promise.all([
+        DeviceInfo.getFreeDiskStorage(),    // bytes
+        DeviceInfo.getTotalDiskCapacity(),  // bytes
+    ]);
+
+    // Get size of app's documents directory
+    const appDocumentsSize = await RNFS.getFSInfo()
+        .then(info => info.freeSpace)
+        .catch(() => 0);
+
+    return {
+        total: totalDiskCapacity,
+        free: freeDiskStorage,
+        usedByApp: 0, // RNFS.getFSInfo doesn't give per-app size easily
+    };
+};
+
+// Pre-check before large download
+const downloadPayslip = async (url: string) => {
+    const { free } = await checkStorageSpace();
+    const fileSize = await getRemoteFileSize(url); // HEAD request → Content-Length
+
+    if (fileSize > free * 0.9) { // 90% buffer
+        Alert.alert(
+            'Insufficient Storage',
+            `Need ${formatBytes(fileSize)} but only ${formatBytes(free)} available.`,
+            [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Clear Cache', onPress: async () => {
+                    await clearAppCache();
+                    await downloadPayslip(url); // retry
+                }},
+            ]
+        );
+        return;
+    }
+
+    // Proceed with download
+    await actualDownload(url);
+};
+
+// Cache management — clear old payslips
+const manageCacheSize = async () => {
+    const payslipsDir = `${RNFS.DocumentDirectoryPath}/payslips`;
+    const files = await RNFS.readDir(payslipsDir);
+
+    // Sort by modification time
+    const sorted = files.sort((a, b) => b.mtime - a.mtime);
+
+    // Keep last 12 months, delete older
+    const toDelete = sorted.slice(12);
+    await Promise.all(toDelete.map(f => RNFS.unlink(f.path)));
+
+    console.log(`Cleaned up ${toDelete.length} old payslips`);
+};
+
+// AsyncStorage size check (approximate)
+const checkAsyncStorageSize = async () => {
+    const keys = await AsyncStorage.getAllKeys();
+    const pairs = await AsyncStorage.multiGet(keys);
+    const totalSize = pairs.reduce((sum, [k, v]) => sum + (k?.length ?? 0) + (v?.length ?? 0), 0);
+    console.log(`AsyncStorage using ~${(totalSize / 1024).toFixed(1)}KB`);
+    return totalSize;
+};
+```
+
+---
+
+### Q477. How do you implement biometric-protected storage?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Biometric + Storage
+
+**Answer:**
+```js
+import * as Keychain from 'react-native-keychain';
+
+// Pattern: Store sensitive data in Keychain protected by biometric
+// Only readable after successful biometric authentication
+
+export const BiometricStorage = {
+    // Store — biometric required to read back
+    async set(key: string, value: string): Promise<boolean> {
+        try {
+            await Keychain.setGenericPassword(key, value, {
+                service: `com.yourapp.biometric.${key}`,
+                accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED,
+                accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_ANY_OR_DEVICE_PASSCODE,
+                // Fallback to passcode if biometrics not enrolled
+            });
+            return true;
+        } catch (error) {
+            console.error('BiometricStorage.set failed:', error);
+            return false;
+        }
+    },
+
+    // Read — triggers biometric prompt
+    async get(key: string, promptTitle = 'Authenticate'): Promise<string | null> {
+        try {
+            const result = await Keychain.getGenericPassword({
+                service: `com.yourapp.biometric.${key}`,
+                authenticationPrompt: {
+                    title: promptTitle,
+                    subtitle: 'Verify your identity to access secure data',
+                    cancel: 'Cancel',
+                },
+            });
+
+            return result ? result.password : null;
+        } catch (error) {
+            if (error.message?.includes('UserCancel') ||
+                error.message?.includes('User canceled')) {
+                return null; // user dismissed — not an error
+            }
+            throw error;
+        }
+    },
+
+    async delete(key: string): Promise<void> {
+        await Keychain.resetGenericPassword({ service: `com.yourapp.biometric.${key}` });
+    },
+};
+
+// Usage in payment screen
+const PaymentScreen = () => {
+    const [cardNumber, setCardNumber] = useState<string | null>(null);
+
+    const loadSavedCard = async () => {
+        // Triggers Face ID / Touch ID prompt
+        const card = await BiometricStorage.get(
+            'saved_card',
+            'Authenticate to use saved card'
+        );
+        if (card) setCardNumber(card);
+    };
+
+    const saveCard = async (number: string) => {
+        const success = await BiometricStorage.set('saved_card', number);
+        if (success) {
+            Alert.alert('Card saved securely with biometric protection');
+        }
+    };
+
+    return (
+        <View>
+            {cardNumber ? (
+                <Text>**** **** **** {cardNumber.slice(-4)}</Text>
+            ) : (
+                <Button title="Use Saved Card 🔒" onPress={loadSavedCard} />
+            )}
+        </View>
+    );
+};
+```
+
+---
+
+### Q478. How do you handle app data on logout?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Data Management
+
+**Answer:**
+```typescript
+// Complete data cleanup on logout
+// Critical for security — prevent previous user's data from leaking
+
+export const performLogout = async (): Promise<void> => {
+    try {
+        // 1. Revoke server session (invalidate token on backend)
+        try {
+            const refreshToken = await TokenStorage.getRefreshToken();
+            if (refreshToken) {
+                await api.post('/auth/logout', { refreshToken });
+            }
+        } catch {
+            // Don't block logout if server call fails
+        }
+
+        // 2. Clear auth tokens from Keychain
+        await TokenStorage.clearTokens();
+
+        // 3. Clear MMKV user data
+        const mmkv = new MMKV();
+        mmkv.delete('access_token_cache');
+        mmkv.delete('token_expiry');
+        mmkv.delete('user_data');
+        mmkv.delete('user_preferences');
+        // Keep: theme, language (device preferences, not user-specific)
+
+        // 4. Clear AsyncStorage user-specific data
+        await AsyncStorage.multiRemove([
+            STORAGE_KEYS.AUTH_TOKEN,
+            STORAGE_KEYS.USER_DATA,
+            STORAGE_KEYS.LAST_SYNC,
+        ]);
+        // Keep: STORAGE_KEYS.THEME, STORAGE_KEYS.LANGUAGE
+
+        // 5. Clear local database (WatermelonDB)
+        await database.write(async () => {
+            // Delete all user-specific records
+            const employees = await database.get('employees').query().fetch();
+            await database.batch(
+                ...employees.map(e => e.prepareDestroyPermanently())
+            );
+        });
+
+        // 6. Clear API cache
+        ApiCache.invalidatePrefix('employees:');
+        ApiCache.invalidatePrefix('attendance:');
+        ApiCache.invalidatePrefix('payslip:');
+
+        // 7. Clear React Query cache
+        queryClient.clear();
+
+        // 8. Cancel pending network requests
+        apiCancelToken?.cancel('User logged out');
+
+        // 9. Cancel any running timers/subscriptions
+        clearAllPushSubscriptions();
+
+        // 10. Clear biometric storage (optional — may want to keep for quick re-login)
+        // await BiometricStorage.delete('saved_card');
+
+        // 11. Navigate to login
+        navigationRef.current?.reset({
+            index: 0,
+            routes: [{ name: 'Login' }],
+        });
+
+    } catch (error) {
+        // Even if cleanup fails partially, still navigate to login
+        Sentry.captureException(error, { tags: { context: 'logout' } });
+        navigationRef.current?.reset({
+            index: 0,
+            routes: [{ name: 'Login' }],
+        });
+    }
+};
+```
+
+---
+
+### Q479. How do you implement data export for GDPR / data portability?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Low | **Category:** Data Management + Compliance
+
+**Answer:**
+```js
+// GDPR requires providing users with their data on request
+
+import Share from 'react-native-share';
+import RNFS from 'react-native-fs';
+
+const exportUserData = async (userId: string) => {
+    // Collect all user data
+    const [
+        profile,
+        attendanceHistory,
+        leaveHistory,
+        payslips,
+        preferences,
+    ] = await Promise.all([
+        fetchUserProfile(userId),
+        fetchAttendanceHistory(userId),
+        fetchLeaveHistory(userId),
+        fetchPayslipMetadata(userId),
+        getStoredPreferences(),
+    ]);
+
+    const exportData = {
+        exportDate: new Date().toISOString(),
+        userId,
+        profile: {
+            name: profile.name,
+            email: profile.email,
+            department: profile.department,
+            joinDate: profile.joinDate,
+        },
+        attendance: attendanceHistory.map(r => ({
+            date: r.date,
+            checkIn: r.checkIn,
+            checkOut: r.checkOut,
+            status: r.status,
+        })),
+        leaveRequests: leaveHistory,
+        payslipDates: payslips.map(p => p.month),
+        preferences: {
+            theme: preferences.theme,
+            language: preferences.language,
+            notifications: preferences.notificationSettings,
+        },
+        // Note: passwords and tokens are NOT exported (security)
+    };
+
+    // Write to file
+    const fileName = `data-export-${userId}-${Date.now()}.json`;
+    const filePath = `${RNFS.DocumentDirectoryPath}/${fileName}`;
+    await RNFS.writeFile(filePath, JSON.stringify(exportData, null, 2), 'utf8');
+
+    // Share the file
+    await Share.open({
+        title: 'Your Data Export',
+        url: `file://${filePath}`,
+        type: 'application/json',
+        message: 'Your personal data export is attached.',
+    });
+
+    // Clean up after sharing
+    await RNFS.unlink(filePath);
+};
+```
+
+---
+
+### Q480. What are the best practices for storage security in a production React Native app?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Very High | **Category:** Storage Security Summary
+
+**Answer:**
+```
+Security tier for data:
+
+Tier 1 — Never store on device:
+  - Private keys, server secrets
+  - Raw payment card numbers (use tokenisation)
+  - Government ID numbers (India: Aadhaar)
+  - Unencrypted passwords
+
+Tier 2 — Keychain/Keystore only:
+  - Auth tokens (access + refresh)
+  - Biometric-protected PINs
+  - Encryption keys
+  - User credentials
+
+Tier 3 — MMKV Encrypted:
+  - User session data
+  - App preferences with PII
+  - Cached authentication state
+
+Tier 4 — AsyncStorage / Regular storage:
+  - Non-sensitive preferences (theme, language)
+  - Feature flags
+  - Cached non-sensitive API responses
+  - App version / migration status
+```
+
+```js
+// Security checklist:
+const storageSecurityChecklist = {
+    // ✅ Never hardcode encryption keys
+    badExample: 'const key = "hardcoded-secret"',
+    goodExample: 'derive key from Keychain + device ID',
+
+    // ✅ Rotate tokens regularly
+    tokenRotation: 'Access token: 15 min, Refresh token: 30 days',
+
+    // ✅ Clear sensitive data on logout (see Q478)
+    logoutCleanup: 'Always call performLogout() which clears all sensitive data',
+
+    // ✅ Screenshot prevention on sensitive screens (see Q471)
+    screenshotPrevention: 'Enable on: payment, payslip, salary details screens',
+
+    // ✅ Certificate pinning (see Q307)
+    certPinning: 'For banking APIs, payment gateways',
+
+    // ✅ Jailbreak/root detection
+    jailbreakDetection: `
+        import JailMonkey from 'jail-monkey';
+        if (JailMonkey.isJailBroken() || JailMonkey.isOnExternalStorage()) {
+            Alert.alert('Security risk', 'This device may be compromised');
+            // Decide: warn only, or block app usage
+        }
+    `,
+
+    // ✅ Biometric binding for sensitive operations
+    biometricBinding: 'Payment: require biometric per-transaction',
+
+    // ✅ Data minimisation — only store what you need
+    dataMins: 'Don\'t cache full employee list — only current user\'s profile',
+
+    // ✅ Android allowBackup
+    allowBackup: 'Set allowBackup="false" or configure backup_rules.xml to exclude sensitive data',
+
+    // ✅ ProGuard/R8 for Android
+    codeObfuscation: 'minifyEnabled true in release build — obfuscates class names',
+
+    // ✅ Regular security audits
+    audits: 'Run: npm audit, SAST tools (MobSF), and manual penetration testing',
+};
+
+// Summary for interview:
+// "In our ERP app, tokens go to Keychain via react-native-keychain,
+//  employee data goes to MMKV (encrypted), the offline DB is WatermelonDB
+//  with planned SQLCipher migration. We clear all user data on logout,
+//  prevent screenshots on payslip screens, and use certificate pinning
+//  for the Razorpay integration."
+```
+
+---
+
+## Sections Overview (Q481–Q500)
+
+| Section | Questions | Topics |
+|---------|-----------|--------|
 | Miscellaneous | Q481–Q500 | Accessibility, internationalisation, misc APIs |
 
 ---
