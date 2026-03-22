@@ -22447,3 +22447,2004 @@ const criticalPaths = [
 ---
 
 *Part 01 of 8 — [← Back to Part README](./README.md) · [← Main README](../README.md)*
+
+## Section 11: Debugging (Q421–Q450)
+
+---
+
+### Q421. What are the primary debugging tools available in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Debugging Tools Overview
+
+**Answer:**
+
+```
+Tool                    | Purpose                                    | When to use
+────────────────────────────────────────────────────────────────────────────────
+Flipper                 | Native + JS debugging platform             | Everyday development
+React DevTools          | Component tree, props, state, profiler     | UI / re-render issues
+Hermes Debugger         | JS debugging for Hermes engine             | Breakpoints, call stack
+Chrome DevTools         | JS debugging for JSC engine                | Non-Hermes apps
+LogBox                  | In-app error overlay and warnings          | Quick error info
+Metro logs              | Bundler output, build errors               | Metro/bundler issues
+Xcode debugger          | iOS native crashes, memory, CPU            | Native iOS issues
+Android Studio Profiler | Android native debugging                   | Native Android issues
+Sentry / Firebase       | Production crash tracking                  | Post-release issues
+```
+
+```js
+// Dev menu (shake device or ⌘D simulator / ⌘M emulator):
+// - Reload JavaScript
+// - Open Debugger
+// - Toggle Performance Monitor
+// - Show Inspector
+// - Open React DevTools
+
+// Accessing dev menu programmatically
+if (__DEV__) {
+    DevSettings.reload();         // reload JS bundle
+    DevMenu.show();               // show dev menu (requires DevMenu import)
+}
+
+// Check if running in dev mode
+console.log('Dev mode:', __DEV__);
+
+// LogBox — controls in-app warning/error display
+import { LogBox } from 'react-native';
+
+// Ignore specific warnings (use sparingly — fix the root cause instead)
+LogBox.ignoreLogs([
+    'Warning: componentWillMount',
+    'Non-serializable values were found in the navigation state',
+]);
+
+// Ignore all logs (for demos only — never in production)
+// LogBox.ignoreAllLogs();
+```
+
+---
+
+### Q422. How do you set up and use Flipper for React Native debugging?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Flipper
+
+**Answer:**
+```bash
+# Install Flipper desktop app
+# https://fbflipper.com/
+
+# React Native 0.62+ — Flipper integration pre-built
+# Android: android/app/build.gradle already has Flipper configured
+# iOS: ios/Podfile already includes FlipperKit pods
+
+# Start Flipper → Open your app → Flipper auto-connects
+```
+
+**Key Flipper plugins and what they show:**
+
+```
+Plugin                 | What it shows
+────────────────────────────────────────────────────────────
+Logs                   | JS console.log/warn/error output
+Layout Inspector       | Component hierarchy, props, styles
+React DevTools         | React component tree, state, hooks
+Network                | HTTP requests, responses, timing
+Images                 | Loaded images, cache hits/misses
+Databases              | SQLite / WatermelonDB queries
+Async Storage          | AsyncStorage keys and values
+Crash Reporter         | Native crash logs + symbolicated stacks
+Hermes Debugger        | JS breakpoints, call stack, profiling
+Performance            | FPS monitor, JS/UI thread usage
+Redux Flipper          | Redux actions, state tree (requires plugin)
+```
+
+```js
+// Enable Network plugin — intercept fetch requests
+// android/app/src/debug/java/com/yourapp/ReactNativeFlipper.java
+// (Already configured by default in new projects)
+
+// Add Redux plugin
+npm install redux-flipper --save-dev
+
+// store.js
+import { configureStore } from '@reduxjs/toolkit';
+const store = configureStore({
+    reducer: rootReducer,
+    enhancers: (getDefaultEnhancers) =>
+        __DEV__
+            ? getDefaultEnhancers().concat(require('redux-flipper').default())
+            : getDefaultEnhancers(),
+});
+
+// Custom Flipper plugin (advanced)
+import { addPlugin } from 'react-native-flipper';
+
+if (__DEV__) {
+    addPlugin({
+        getId() { return 'MyCustomPlugin'; },
+        onConnect(connection) {
+            connection.receive('triggerAction', (data, responder) => {
+                console.log('Flipper triggered:', data);
+                responder.success({ result: 'done' });
+            });
+        },
+        onDisconnect() {},
+    });
+}
+```
+
+---
+
+### Q423. How do you use the Hermes JavaScript debugger?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Hermes Debugger
+
+**Answer:**
+Hermes has its own debugger protocol (not Chrome DevTools protocol). There are two ways to debug:
+
+```bash
+# Method 1: Flipper → Hermes Debugger (recommended)
+# 1. Open Flipper
+# 2. Connect device/simulator
+# 3. Click "Hermes Debugger" plugin
+# 4. Set breakpoints in source files
+# 5. Interact with app → breakpoints hit
+
+# Method 2: Chrome DevTools with Hermes
+# 1. Start dev server: npx react-native start
+# 2. Open Chrome → chrome://inspect
+# 3. Click "inspect" next to your app
+# (Hermes exposes a CDP endpoint Metro bridges to Chrome)
+```
+
+```js
+// Setting breakpoints programmatically
+debugger; // pauses execution at this line in debugger
+
+// Example: debug a complex calculation
+const calculatePayroll = (employee) => {
+    const baseSalary = employee.ctc * 0.83;
+    const hra = baseSalary * 0.4;
+    debugger; // pause here to inspect values
+    const pf = baseSalary * 0.12;
+    return { baseSalary, hra, pf, net: baseSalary + hra - pf };
+};
+
+// console methods for quick debugging
+console.log('Value:', someValue);
+console.warn('Warning:', issue);
+console.error('Error:', err);
+console.table([{ name: 'Devesh', salary: 85000 }, { name: 'Priya', salary: 75000 }]);
+console.group('API Call');
+  console.log('URL:', url);
+  console.log('Response:', data);
+console.groupEnd();
+console.time('heavyOperation');
+heavyOperation();
+console.timeEnd('heavyOperation'); // "heavyOperation: 234.5ms"
+
+// Enable source maps for readable stack traces
+// metro.config.js
+module.exports = {
+    transformer: {
+        minifierConfig: {
+            keep_fnames: true,   // readable function names in stack traces
+            mangle: false,       // no variable name mangling in dev
+        },
+    },
+};
+```
+
+---
+
+### Q424. How do you debug a white screen / blank screen issue?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Common Bugs
+
+**Answer:**
+A white/blank screen is one of the most common issues. Systematic debugging approach:
+
+```bash
+# Step 1: Check Metro bundler output
+npx react-native start
+# Look for red error text in terminal
+
+# Step 2: Check native logs
+# Android:
+adb logcat *:S ReactNative:V ReactNativeJS:V
+# Look for: "Unable to load script" or native exceptions
+
+# iOS:
+# Xcode → Window → Devices → select device → open console
+# Filter by your app name
+```
+
+```js
+// Common causes and fixes:
+
+// Cause 1: JavaScript error on startup (most common)
+// Symptom: Red error screen in DEV, white in PROD
+// Fix: Add global error handler to catch silent errors
+ErrorUtils.setGlobalHandler((error, isFatal) => {
+    console.error('Global error:', error);
+    if (isFatal) {
+        // Show user-friendly error UI instead of white screen
+        // In production, log to Sentry
+        Sentry.captureException(error);
+    }
+});
+
+// Cause 2: Root component crashes silently
+// Fix: Wrap root in error boundary
+export default function App() {
+    return (
+        <ErrorBoundary
+            fallback={<View><Text>Something went wrong. Please restart.</Text></View>}
+        >
+            <AppContent />
+        </ErrorBoundary>
+    );
+}
+
+// Cause 3: Missing dependency or native module
+// Symptom: "Cannot read property 'X' of undefined"
+// Fix: Check import, pod install, gradle sync
+
+// Cause 4: Async root component (anti-pattern)
+// ❌ Root component is async — React can't render it
+const App = async () => { // ← WRONG
+    const data = await loadData();
+    return <View />;
+};
+// ✅ Use state + useEffect
+const App = () => {
+    const [ready, setReady] = useState(false);
+    useEffect(() => { loadData().then(() => setReady(true)); }, []);
+    if (!ready) return <SplashScreen />;
+    return <AppContent />;
+};
+
+// Cause 5: Navigation misconfiguration
+// Missing initialRouteName, undefined screen component, etc.
+// Fix: Check Stack.Screen components are properly imported
+```
+
+---
+
+### Q425. How do you debug network requests in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Network Debugging
+
+**Answer:**
+```js
+// Method 1: Flipper Network Plugin (best)
+// Flipper → Network → shows all HTTP calls, headers, body, response, timing
+
+// Method 2: Axios interceptors (for axios users)
+import axios from 'axios';
+
+if (__DEV__) {
+    axios.interceptors.request.use(
+        (config) => {
+            console.log(`[API] ${config.method?.toUpperCase()} ${config.url}`);
+            console.log('[API] Headers:', config.headers);
+            if (config.data) console.log('[API] Body:', config.data);
+            return config;
+        },
+        (error) => {
+            console.error('[API] Request error:', error);
+            return Promise.reject(error);
+        }
+    );
+
+    axios.interceptors.response.use(
+        (response) => {
+            console.log(`[API] Response ${response.status}:`, response.config.url);
+            console.log('[API] Data:', response.data);
+            return response;
+        },
+        (error) => {
+            console.error(`[API] Error ${error.response?.status}:`, error.config?.url);
+            console.error('[API] Error data:', error.response?.data);
+            return Promise.reject(error);
+        }
+    );
+}
+
+// Method 3: fetch polyfill logger
+const originalFetch = global.fetch;
+global.fetch = async (...args) => {
+    const [url, options] = args;
+    console.log(`[FETCH] ${options?.method || 'GET'} ${url}`);
+    const start = Date.now();
+    const response = await originalFetch(...args);
+    console.log(`[FETCH] ${response.status} (${Date.now() - start}ms) ${url}`);
+    return response;
+};
+
+// Method 4: Charles Proxy / Proxyman (native device traffic)
+// Set device Wi-Fi proxy to laptop IP:8888
+// Charles/Proxyman shows ALL network traffic including native HTTPS
+// Requires installing SSL certificate on device for HTTPS inspection
+// Essential for: debugging RN fetch + native SDK calls simultaneously
+
+// Method 5: Network error types
+try {
+    await fetch('https://api.example.com/data');
+} catch (error) {
+    if (error.message === 'Network request failed') {
+        // No internet, server unreachable, SSL error
+        console.log('Network unreachable or SSL error');
+    }
+}
+```
+
+---
+
+### Q426. How do you debug React Native crashes on Android?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Android Debugging
+
+**Answer:**
+```bash
+# Method 1: adb logcat — filter crash logs
+adb logcat *:E | grep -i "react\|yourapp\|FATAL\|AndroidRuntime"
+
+# Filter to specific tags for cleaner output
+adb logcat -s ReactNative:E ReactNativeJS:E AndroidRuntime:E
+
+# Save crash log to file
+adb logcat -d > crash.log
+
+# Method 2: Android Studio → Logcat
+# Filter: package:mine  (shows only your app's logs)
+# Look for: "FATAL EXCEPTION" → shows Java/Kotlin stack trace
+
+# Method 3: adb bugreport (full device report)
+adb bugreport > bugreport.zip
+# Extract and search for your package name
+```
+
+```kotlin
+// Common Android crash causes and fixes:
+
+// 1. NetworkOnMainThreadException
+// Cause: Network call on UI thread
+// Fix: Move to background thread or use coroutines
+// ❌ Wrong:
+fun fetchData() {
+    val response = URL("https://api.com").readText() // on main thread!
+}
+// ✅ Fix:
+fun fetchData() {
+    CoroutineScope(Dispatchers.IO).launch {
+        val response = URL("https://api.com").readText()
+    }
+}
+
+// 2. NullPointerException in native module
+// Fix: null safety checks
+val activity = currentActivity ?: return promise.reject("NO_ACTIVITY", "")
+
+// 3. IllegalStateException: Can not perform this action after onSaveInstanceState
+// Cause: Fragment transaction after activity saved
+// Fix: Check isAdded() before fragment transactions
+if (activity?.isAdded == true && !activity.isFinishing) {
+    // safe to do fragment transaction
+}
+
+// 4. OutOfMemoryError
+// Fix: Reduce image sizes, clear caches, limit concurrent operations
+
+// 5. ConcurrentModificationException
+// Fix: Use thread-safe collections or synchronise access
+```
+
+```js
+// JS crash debugging on Android
+// adb logcat | grep ReactNativeJS
+// Shows: "JS ERROR: ReferenceError: x is not defined"
+// With stack trace pointing to your JS code
+```
+
+---
+
+### Q427. How do you debug React Native crashes on iOS?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** iOS Debugging
+
+**Answer:**
+```bash
+# Method 1: Xcode console
+# Run from Xcode → Console shows native + JS logs
+# Search for "Exception" or your app name
+
+# Method 2: Xcode crash logs
+# Window → Devices and Simulators → your device → View Device Logs
+# Filter by your app name
+# Look for: "Exception Type" and "Exception Codes"
+
+# Method 3: Instruments — for memory/performance crashes
+# Product → Profile → Time Profiler (CPU)
+#                   → Leaks (memory)
+#                   → Allocations (memory growth)
+```
+
+```swift
+// Common iOS crash causes:
+
+// 1. Main thread checker violation
+// "UIAlertController called from background thread"
+// Fix: Dispatch UI operations to main thread
+DispatchQueue.main.async {
+    // all UIKit operations here
+}
+
+// 2. EXC_BAD_ACCESS (memory access violation)
+// Usually caused by accessing deallocated object
+// Fix: Use weak references in closures
+class MyModule {
+    func doWork(completion: @escaping (String) -> Void) {
+        DispatchQueue.global().async { [weak self] in  // ← weak self
+            guard let self = self else { return }
+            let result = self.compute()
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+}
+
+// 3. NSInvalidArgumentException
+// "unrecognized selector sent to instance"
+// Usually a native module method signature mismatch
+// Fix: Verify Objective-C bridge declaration matches Swift implementation
+
+// 4. App killed by watchdog (0x8badf00d)
+// "ate bad food" — app took too long to launch/respond
+// Fix: Move slow startup work off main thread
+```
+
+```js
+// Symbolicate iOS crash reports
+// Required tools: symbolicatecrash (comes with Xcode)
+// 1. Get crash log from device
+// 2. Get .dSYM file from Xcode archive
+// 3. Run: symbolicatecrash crash.log MyApp.app.dSYM > symbolicated.log
+// 4. Now stack traces show function names instead of addresses
+```
+
+---
+
+### Q428. How do you use React DevTools with React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** React DevTools
+
+**Answer:**
+```bash
+# Standalone React DevTools
+npm install -g react-devtools
+react-devtools
+# Then shake device → Open React DevTools (or already connected via Flipper)
+
+# OR: use Flipper → React DevTools plugin (no separate install needed)
+```
+
+```
+React DevTools Features in React Native:
+
+Components Tab:
+├── Component tree — full hierarchy of rendered components
+├── Props panel — all current props for selected component
+├── State panel — all useState values
+├── Hooks panel — all hooks with current values
+│   └── Shows: useCallback, useMemo, useContext, useReducer
+├── Edit props/state live — change values without reloading
+└── "Select element" — tap component in app to find it in tree
+
+Profiler Tab:
+├── Record — capture renders over time
+├── Flamegraph — render time per component per commit
+├── Ranked — components sorted by render time
+├── "Why did this render?" — shows what changed (props/state/context)
+└── Interaction tracing — mark user interactions
+```
+
+```js
+// Using DevTools effectively:
+
+// 1. Find what component is causing re-renders
+// Profiler → Record → interact → Stop → check Ranked chart
+
+// 2. Inspect context values
+// Components → select a component → check Context section in hooks
+
+// 3. Live edit props to test edge cases
+// Select component → click prop value → type new value
+
+// 4. Find slow renders
+// Profiler → enable "Highlight updates" (cog icon)
+// Components flash on every render — frequency = re-render problem
+
+// 5. Name your anonymous functions for better DevTools display
+// ❌ () => {} in JSX — shows as "Anonymous" in DevTools
+// ✅ Named function or useCallback with deps
+const renderItem = useCallback(({ item }) => <Row item={item} />, []);
+```
+
+---
+
+### Q429. How do you debug a performance issue (FPS drops)?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Performance Debugging
+
+**Answer:**
+```js
+// Step 1: Identify where the drop occurs
+// Dev menu → Show Perf Monitor
+// UI FPS: ideal 60 (or 120 on ProMotion), drop = rendering issue
+// JS FPS: can drop without affecting UI if using Reanimated
+
+// Step 2: Profile with React DevTools Profiler
+// Record while performing the slow interaction
+// Look for: components that render frequently with no reason
+
+// Step 3: Flipper → Performance plugin
+// Timeline shows JS thread, UI thread, and renders
+
+// Step 4: Identify the type of drop
+
+// Type A: JS FPS drops → heavy JS computation
+// Symptoms: slow interaction response, laggy typing
+// Tools: React Profiler flamegraph, Hermes CPU profiler
+
+// Type B: UI FPS drops → animation or layout issue
+// Symptoms: janky scrolling, animation stutters
+// Tools: Systrace (Android), Instruments (iOS)
+
+// Android Systrace
+adb shell am start -n com.android.traceur/.MainActivity
+// OR in Flipper → Profiler
+
+// iOS Instruments
+// Xcode → Product → Profile → Core Animation
+// Shows GPU utilisation and dropped frames
+```
+
+```js
+// Common fixes by drop type:
+
+// Heavy JS computation
+// ❌
+const sortedItems = items.sort((a, b) => expensiveComparison(a, b));
+// ✅
+const sortedItems = useMemo(() => items.sort(...), [items]);
+
+// Too many re-renders
+// Use React Profiler → "Why did this render?"
+// Common cause: parent re-renders with new object/array reference
+// Fix: useMemo, useCallback, React.memo
+
+// Animation on JS thread
+// ❌ Animated.timing without useNativeDriver: true
+// ✅ Reanimated 2 (all on UI thread)
+
+// FlatList without virtualisation config
+// ✅ Proper FlatList config (see Q241)
+
+// Images not cached
+// ❌ Image component — re-downloads on every mount
+// ✅ FastImage with cacheControl.immutable
+
+// Layout thrashing from repeated measurements
+// ❌ element.measure() in render loop
+// ✅ onLayout callback + cache result
+```
+
+---
+
+### Q430. What is LogBox and how do you work with it?
+
+**Difficulty:** 🟢 Easy | **Frequency:** Medium | **Category:** Debugging Tools
+
+**Answer:**
+LogBox is React Native's in-app error and warning display system (replaced YellowBox in RN 0.63+).
+
+```js
+import { LogBox } from 'react-native';
+
+// LogBox shows:
+// - Red box: JavaScript errors (unhandled exceptions)
+// - Yellow box: JavaScript warnings (console.warn)
+// - Native errors: native crashes with JS stack
+
+// Silence specific warnings (when you know it's safe to ignore)
+LogBox.ignoreLogs([
+    // Third-party library with known deprecation warning
+    'Warning: componentWillMount has been renamed',
+    // React Navigation warning for specific setup
+    'Non-serializable values were found in the navigation state',
+    // Partial match — ignores all messages containing this string
+    'Remote debugger',
+]);
+
+// For development only — never ignore in production
+if (__DEV__) {
+    LogBox.ignoreLogs(['Require cycle:']); // common RN warning, usually safe
+}
+
+// Re-enable LogBox after ignoring (edge case testing)
+LogBox.uninstall(); // completely removes LogBox from app
+// Use sparingly — you need LogBox to catch real errors
+
+// Intercept errors programmatically
+if (__DEV__) {
+    const originalConsoleError = console.error;
+    console.error = (...args) => {
+        // Filter and re-route specific errors
+        if (args[0]?.includes('Known non-critical warning')) return;
+        originalConsoleError(...args);
+    };
+}
+
+// Custom error handler (supplements LogBox)
+import { setJSExceptionHandler } from 'react-native-exception-handler';
+
+setJSExceptionHandler((error, isFatal) => {
+    if (isFatal) {
+        Alert.alert(
+            'Unexpected error',
+            'Please restart the app.\n\nError: ' + error.message,
+            [{ text: 'Restart', onPress: () => RNRestart.Restart() }]
+        );
+    }
+    Sentry.captureException(error);
+}, true); // true = also handle non-fatal errors
+```
+
+---
+
+### Q431. How do you set up Sentry for React Native crash reporting?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Crash Reporting
+
+**Answer:**
+```bash
+# Install
+npx expo install @sentry/react-native
+# OR for bare RN:
+npm install @sentry/react-native
+npx sentry-wizard@latest -i reactNative
+# Wizard auto-configures android/ios build files
+```
+
+```js
+// App.tsx — Sentry initialisation
+import * as Sentry from '@sentry/react-native';
+
+Sentry.init({
+    dsn: 'https://examplePublicKey@o0.ingest.sentry.io/0',
+
+    // Performance monitoring
+    tracesSampleRate: 0.2,              // 20% of sessions get performance data
+    profilesSampleRate: 0.1,           // 10% get profiling
+
+    // Environment setup
+    environment: process.env.APP_ENV || 'development',
+    release: `com.yourapp@${require('./package.json').version}`,
+
+    // Debug in development
+    debug: __DEV__,
+    enabled: !__DEV__, // disable in dev (optional — dev captures are noisy)
+
+    // Breadcrumbs — automatic trail of events before crash
+    maxBreadcrumbs: 50,
+
+    // Attachments and screenshots
+    attachScreenshot: true,
+    attachViewHierarchy: true,
+});
+
+export default Sentry.wrap(App); // wraps App with Sentry error boundary
+```
+
+```js
+// Manual error capture
+import * as Sentry from '@sentry/react-native';
+
+// Capture exception (unhandled error you caught)
+try {
+    await processPayroll(employeeId);
+} catch (error) {
+    Sentry.captureException(error, {
+        tags: { module: 'payroll', employeeId },
+        extra: { payrollMonth: '2024-01', amount: 85000 },
+    });
+}
+
+// Capture message (non-exception event)
+Sentry.captureMessage('Suspicious login attempt', 'warning');
+
+// Set user context (appears in all subsequent events)
+Sentry.setUser({
+    id: user.id,
+    email: user.email,
+    username: user.name,
+});
+
+// Add breadcrumb (trail of actions leading to crash)
+Sentry.addBreadcrumb({
+    message: 'User tapped checkout',
+    category: 'ui.click',
+    level: 'info',
+    data: { productId: item.id, price: item.price },
+});
+
+// Performance transaction
+const transaction = Sentry.startTransaction({ name: 'loadDashboard' });
+Sentry.getCurrentHub().configureScope(scope => scope.setSpan(transaction));
+
+await loadDashboardData();
+
+transaction.finish();
+```
+
+---
+
+### Q432. How do you read and interpret a Sentry crash report?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Crash Reporting
+
+**Answer:**
+```
+Sentry Issue Page structure:
+
+1. Error title & type
+   └── "TypeError: Cannot read property 'name' of undefined"
+   └── Helps instantly know the type of error
+
+2. Stack trace (most important)
+   ├── Frame 0 (top): Where the crash happened
+   ├── Frame 1: What called Frame 0
+   └── ... up to root cause
+   ✅ With source maps: shows your actual source code + line numbers
+   ❌ Without source maps: shows minified code (useless)
+
+3. Breadcrumbs (trail before crash)
+   └── Shows: navigation events, API calls, user actions before crash
+   └── Essential for reproducing the issue
+
+4. Device context
+   └── OS version, device model, RAM, battery, connectivity
+
+5. User context
+   └── Which users are affected (set via Sentry.setUser)
+
+6. Tags / Extra data
+   └── Custom data you attached (module, API endpoint, etc.)
+
+7. Release & environment
+   └── Which version and environment (production/staging)
+
+8. Frequency / trends
+   └── How many users affected, when it started, is it getting worse
+```
+
+```js
+// Setting up source maps (critical for readable stack traces)
+// android/app/build.gradle (auto-added by Sentry wizard)
+apply from: "../../node_modules/@sentry/react-native/sentry.gradle"
+
+// iOS — Sentry uploads source maps during Xcode build
+// Run Script build phase (auto-added by wizard)
+
+// Verify source maps work:
+// 1. Release build → crash → Sentry
+// 2. Stack trace shows your actual file/line number → ✅
+// 3. Stack trace shows `index.android.bundle:1:xxxx` → ❌ no source maps
+```
+
+---
+
+### Q433. How do you debug memory leaks in React Native?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Memory Debugging
+
+**Answer:**
+```bash
+# Android: Android Studio Memory Profiler
+# 1. Open Android Studio → Profile
+# 2. Select app process
+# 3. Memory tab → Record allocations
+# 4. Perform actions that cause suspected leak
+# 5. Trigger GC → take heap snapshot
+# 6. Compare snapshots — retained objects = leak
+
+# iOS: Xcode Instruments → Leaks
+# 1. Product → Profile → Leaks template
+# 2. Perform actions
+# 3. Red bars = leaked memory
+# 4. Details show: object type, allocation call stack
+```
+
+```js
+// Flipper → Memory plugin
+// Shows JS heap over time
+// Sawtooth pattern: normal (GC cycles)
+// Monotonically increasing: memory leak
+
+// Manual leak detection pattern
+const useMemoryLeakDetector = (componentName: string) => {
+    const mountTime = useRef(Date.now());
+
+    useEffect(() => {
+        if (__DEV__) {
+            console.log(`[MEM] ${componentName} mounted`);
+        }
+        return () => {
+            if (__DEV__) {
+                const lifetime = Date.now() - mountTime.current;
+                console.log(`[MEM] ${componentName} unmounted after ${lifetime}ms`);
+                // Long lifetimes or multiple mount/unmount cycles without cleanup = leak candidate
+            }
+        };
+    }, []);
+};
+
+// Common leak sources with fixes:
+// See Q238 / Q239 for full patterns — here is quick reference:
+
+// 1. Event listeners → always remove in cleanup
+// 2. setInterval/setTimeout → clearInterval/clearTimeout in cleanup
+// 3. Fetch in useEffect → AbortController or isMounted guard
+// 4. NativeEventEmitter → subscription.remove() in cleanup
+// 5. Large closures in callbacks → minimize captured scope
+// 6. Global state growing unboundedly (chat history, logs)
+//    Fix: cap at max length
+//    const MAX_MESSAGES = 200;
+//    setMessages(prev => [...prev, newMsg].slice(-MAX_MESSAGES));
+```
+
+---
+
+### Q434. How do you debug AsyncStorage issues?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Storage Debugging
+
+**Answer:**
+```js
+// Flipper → Async Storage plugin
+// Shows all key-value pairs in real time
+// Can edit values directly for testing
+
+// Manual debugging utility
+const debugAsyncStorage = async () => {
+    if (!__DEV__) return;
+    const keys = await AsyncStorage.getAllKeys();
+    const pairs = await AsyncStorage.multiGet(keys);
+    console.table(
+        pairs.reduce((acc, [key, value]) => {
+            acc[key] = value ? JSON.parse(value) : null;
+            return acc;
+        }, {})
+    );
+};
+
+// Call on app start to inspect stored state
+useEffect(() => {
+    debugAsyncStorage();
+}, []);
+
+// Common AsyncStorage issues:
+
+// 1. Data not persisting between sessions
+// Cause: Using await incorrectly (not awaiting the promise)
+// ❌ AsyncStorage.setItem('key', value); // not awaited — may not complete before app closes
+// ✅ await AsyncStorage.setItem('key', value);
+
+// 2. Stale data after update
+// Cause: Setting item but reading cached React state
+const loadUser = async () => {
+    const stored = await AsyncStorage.getItem('user');
+    setUser(JSON.parse(stored)); // update React state from fresh storage read
+};
+
+// 3. JSON serialisation errors
+// Cause: Storing circular references or non-serialisable values
+try {
+    await AsyncStorage.setItem('data', JSON.stringify(value));
+} catch (e) {
+    console.error('AsyncStorage serialisation failed:', e);
+    // Log which value caused the issue
+}
+
+// 4. Performance issues (large data)
+// AsyncStorage is not designed for large datasets
+// Fix: Use MMKV for sync access, SQLite for relational data
+```
+
+---
+
+### Q435. How do you debug navigation issues in React Navigation?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Navigation Debugging
+
+**Answer:**
+```js
+// Enable navigation state logging
+import { NavigationContainer } from '@react-navigation/native';
+
+const App = () => {
+    const [isReady, setIsReady] = useState(false);
+    const [initialState, setInitialState] = useState();
+
+    return (
+        <NavigationContainer
+            initialState={initialState}
+            onStateChange={(state) => {
+                if (__DEV__) {
+                    console.log('Nav state:', JSON.stringify(state, null, 2));
+                }
+                // Persist navigation state for debugging
+                AsyncStorage.setItem('NAV_STATE', JSON.stringify(state));
+            }}
+            onReady={() => setIsReady(true)}
+        >
+            <AppNavigator />
+        </NavigationContainer>
+    );
+};
+
+// Debug: print current navigation state
+import { navigationRef } from './navigation';
+
+const debugNavigation = () => {
+    if (__DEV__ && navigationRef.current) {
+        const state = navigationRef.current.getState();
+        console.log('Current route:', navigationRef.current.getCurrentRoute()?.name);
+        console.log('Nav state:', JSON.stringify(state, null, 2));
+    }
+};
+
+// Common navigation issues:
+
+// 1. "Cannot navigate to screen before navigation is ready"
+// Fix: Use navigationRef.isReady() check
+if (navigationRef.isReady()) {
+    navigationRef.navigate('ScreenName');
+}
+
+// 2. Params not received by screen
+// Fix: Use useRoute() hook instead of route.params from navigator
+const route = useRoute<RouteProp<ParamList, 'EmployeeDetail'>>();
+const { employeeId } = route.params;
+
+// 3. Back button goes to wrong screen
+// Fix: navigation.reset() to clear stack
+navigation.reset({ index: 0, routes: [{ name: 'Home' }] });
+
+// 4. Deep link not matching screen
+// Fix: Check linking config with getPathFromState/getStateFromPath
+import { getStateFromPath } from '@react-navigation/native';
+const state = getStateFromPath('/employee/42', linkingConfig);
+console.log('Parsed state:', state); // null = doesn't match any screen
+```
+
+---
+
+### Q436. How do you debug JavaScript errors in production builds?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Very High | **Category:** Production Debugging
+
+**Answer:**
+```bash
+# The problem: production builds minify JS
+# Stack traces look like:
+# at x (index.android.bundle:1:98432)
+# Useless without source maps
+
+# Solution: source maps
+# React Native generates source maps during build
+# Upload to Sentry/Firebase for de-minification
+
+# Android — generate source map
+npx react-native bundle \
+  --platform android \
+  --dev false \
+  --entry-file index.js \
+  --bundle-output ./android/app/src/main/assets/index.android.bundle \
+  --sourcemap-output ./android-source-map.json
+
+# Upload to Sentry
+npx sentry-cli releases files 1.0.0 upload-sourcemaps \
+  --bundle ./android/app/src/main/assets/index.android.bundle \
+  --bundle-sourcemap ./android-source-map.json
+
+# iOS — Xcode build phase uploads automatically when Sentry is configured
+```
+
+```js
+// Test source map accuracy before release
+// 1. Build release APK/IPA
+// 2. Trigger a known crash (add a test crash in a hidden screen)
+// 3. Check Sentry → crash should show your actual file/line/column
+// 4. If showing minified: source maps not uploading correctly
+
+// Production error monitoring best practices:
+import * as Sentry from '@sentry/react-native';
+
+// Rate limiting — don't flood Sentry in production
+Sentry.init({
+    dsn: '...',
+    tracesSampleRate: 0.1,     // 10% for performance
+    sampleRate: 1.0,           // 100% for errors (important events)
+    beforeSend: (event) => {
+        // Filter out non-actionable errors
+        if (event.exception?.values?.[0]?.type === 'NetworkError') {
+            // Count but don't alert on network errors (too noisy)
+            return null; // drop event
+        }
+        return event;
+    },
+});
+
+// Alert rules in Sentry:
+// Alert if: >10 new users affected in 1 hour → PagerDuty/Slack
+// Alert if: error spike (2x normal rate) → Slack
+// Alert if: fatal error → immediate Slack + email
+```
+
+---
+
+### Q437. How do you debug issues with Reanimated animations?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Reanimated Debugging
+
+**Answer:**
+```js
+// 1. Check if animation runs on UI thread
+// In dev build, Reanimated logs if a worklet accidentally calls a non-worklet function
+// Look for: "Reanimated: tried to synchronously call a non-worklet function on the UI thread"
+
+// 2. Add worklet debugging
+const myWorklet = (value) => {
+    'worklet';
+    if (__DEV__) {
+        // console.log in worklets must be via runOnJS
+        runOnJS(console.log)('Worklet value:', value);
+    }
+    return value * 2;
+};
+
+// 3. Visualise shared value changes
+const useSharedValueLogger = (value, name) => {
+    useAnimatedReaction(
+        () => value.value,
+        (current, previous) => {
+            if (__DEV__) {
+                runOnJS(console.log)(`[Animated] ${name}: ${previous} → ${current}`);
+            }
+        }
+    );
+};
+
+const scale = useSharedValue(1);
+useSharedValueLogger(scale, 'scale'); // logs every change
+
+// 4. Common Reanimated errors:
+
+// Error: "Cannot read property 'value' of undefined"
+// Cause: Shared value used before component mounts
+// Fix: Ensure useSharedValue is in component scope, not outside
+
+// Error: "Reanimated: Tried to access .value on the UI thread"
+// Wait — this is actually correct in Reanimated 2
+// "The 'value' property from useSharedValue is reactive in hooks on JS thread"
+
+// Error: "Reading from '_j' which has already been freed"
+// Cause: Accessing shared value after component unmounts
+// Fix: Cancel animations in cleanup
+useEffect(() => {
+    scale.value = withRepeat(withTiming(1.2), -1);
+    return () => cancelAnimation(scale); // cleanup
+}, []);
+
+// 5. Verify Babel plugin is installed
+// babel.config.js must include:
+module.exports = {
+    plugins: ['react-native-reanimated/plugin'],
+    // This MUST be last plugin
+};
+// Without it: worklets don't compile → runtime errors
+```
+
+---
+
+### Q438. How do you debug Redux state issues?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** State Debugging
+
+**Answer:**
+```js
+// 1. Redux DevTools — Flipper plugin (best in class)
+npm install redux-flipper --save-dev
+
+// store.js
+import { createStore } from 'redux';
+import { composeWithDevTools } from 'redux-devtools-extension';
+
+const store = configureStore({
+    reducer: rootReducer,
+    middleware: (getDefaultMiddleware) =>
+        getDefaultMiddleware().concat(
+            __DEV__ ? require('redux-flipper').default() : []
+        ),
+});
+// Flipper → Redux plugin:
+// - Action history with payload
+// - State diff after each action
+// - Time-travel debugging (go back to any previous state)
+// - Action replay
+
+// 2. Custom middleware logger (no Flipper needed)
+const loggerMiddleware = (store) => (next) => (action) => {
+    if (__DEV__) {
+        console.group(`[Redux] ${action.type}`);
+        console.log('Payload:', action.payload);
+        console.log('Prev state:', store.getState());
+    }
+    const result = next(action);
+    if (__DEV__) {
+        console.log('Next state:', store.getState());
+        console.groupEnd();
+    }
+    return result;
+};
+
+// 3. Debug specific selector
+const selectEmployeeList = (state) => {
+    const result = state.employees.list;
+    if (__DEV__) {
+        console.log('[Selector] employees.list:', result.length, 'items');
+    }
+    return result;
+};
+
+// 4. Debug Redux Saga
+// redux-saga has a built-in logger via sagaMiddleware options:
+const sagaMiddleware = createSagaMiddleware({
+    onError: (error, errorInfo) => {
+        console.error('[Saga error]', error, errorInfo);
+        Sentry.captureException(error, { extra: errorInfo });
+    },
+});
+
+// 5. Common Redux issues:
+// State mutation (direct modification instead of returning new object)
+// ❌ case 'ADD_ITEM': state.items.push(item); return state; // mutates!
+// ✅ case 'ADD_ITEM': return { ...state, items: [...state.items, item] };
+// RTK (immer) allows mutation syntax: state.items.push(item) → ✅ (immer handles it)
+```
+
+---
+
+### Q439. How do you debug Expo build failures locally?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Expo / Build Debugging
+
+**Answer:**
+```bash
+# Method 1: Run locally instead of EAS Build
+npx expo run:android  # local Android build
+npx expo run:ios      # local iOS build (requires macOS + Xcode)
+
+# Verbose output to see exact error
+npx expo run:android --verbose
+
+# Method 2: EAS Build local
+eas build --platform android --profile production --local
+# Runs the exact same build steps as EAS but on your machine
+# Faster iteration than waiting for cloud builds
+
+# Method 3: Check native project directly
+# Android:
+cd android
+./gradlew assembleDebug --stacktrace
+# Shows full Gradle error with cause
+
+# iOS:
+cd ios
+pod install --verbose  # for Pod issues
+xcodebuild -workspace MyApp.xcworkspace -scheme MyApp -configuration Debug \
+  -destination 'platform=iOS Simulator,name=iPhone 15' build | xcpretty
+```
+
+```bash
+# Common Expo build failures:
+
+# 1. "Unable to resolve module X"
+# Fix: npm install / pod install / check package.json
+
+# 2. "jest-haste-map: Haste module naming collision"
+# Fix: npx react-native start --reset-cache
+
+# 3. "No Podspec found for 'React-Core'"
+# Fix: cd ios && pod install --repo-update
+
+# 4. "JAVA_HOME not set"
+# Fix: export JAVA_HOME=$(/usr/libexec/java_home)
+
+# 5. Duplicate class errors (Android)
+# Fix: check for conflicting library versions
+# android/app/build.gradle:
+# configurations.all { resolutionStrategy.force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.0' }
+
+# 6. "Execution failed for task ':app:mergeReleaseJavaResource'"
+# Usually conflicting native modules
+# Fix: exclude duplicate files in build.gradle:
+# packagingOptions { exclude 'META-INF/DEPENDENCIES' }
+```
+
+---
+
+### Q440. How do you debug issues with React Navigation deep links?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Deep Link Debugging
+
+**Answer:**
+```bash
+# Test deep links from terminal
+
+# iOS simulator:
+xcrun simctl openurl booted "yourapp://employee/42"
+xcrun simctl openurl booted "https://yourapp.com/employee/42"
+
+# Android emulator:
+adb shell am start -W -a android.intent.action.VIEW \
+  -d "yourapp://employee/42" com.yourapp
+
+# Android physical device:
+adb shell am start -a android.intent.action.VIEW \
+  -d "yourapp://employee/42"
+```
+
+```js
+// Debug URL parsing
+import { getStateFromPath, getPathFromState } from '@react-navigation/native';
+
+const config = {
+    screens: {
+        Home: 'home',
+        Employee: { path: 'employee/:id', parse: { id: String } },
+    },
+};
+
+// Test URL → state parsing
+const url = '/employee/42';
+const state = getStateFromPath(url, config);
+console.log('Parsed:', JSON.stringify(state));
+// Should output: { routes: [{ name: 'Employee', params: { id: '42' } }] }
+// null = URL doesn't match any screen
+
+// Test state → URL generation
+const path = getPathFromState(state, config);
+console.log('Path:', path); // Should output: employee/42
+
+// Debug Linking API
+import { Linking } from 'react-native';
+
+// Check initial URL (deep link that launched app)
+Linking.getInitialURL().then(url => {
+    console.log('Initial URL:', url);
+});
+
+// Watch for new links while app is open
+const subscription = Linking.addEventListener('url', ({ url }) => {
+    console.log('New URL:', url);
+});
+
+// Check URL scheme is registered
+// iOS: Info.plist → CFBundleURLTypes
+// Android: AndroidManifest.xml → intent-filter with scheme
+```
+
+---
+
+### Q441. How do you debug image loading issues in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Images Debugging
+
+**Answer:**
+```js
+// 1. Log image loading events
+<Image
+    source={{ uri: imageUrl }}
+    onLoadStart={() => console.log('[Image] Loading started:', imageUrl)}
+    onLoad={() => console.log('[Image] Loaded successfully:', imageUrl)}
+    onLoadEnd={() => console.log('[Image] Load ended:', imageUrl)}
+    onError={(error) => console.error('[Image] Load failed:', error.nativeEvent.error)}
+/>
+
+// 2. Common image loading failures:
+
+// HTTPS certificate issue
+// Error: "Could not connect to server" or "SSL error"
+// Fix: Check server SSL cert is valid
+// Debug: Run on Android emulator → check logcat for SSL errors
+
+// CORS issue (web-like, rare in native)
+// Usually not an issue in RN (native HTTP, not browser)
+
+// Image URL requires auth
+// Fix: Pass Authorization header
+<Image
+    source={{
+        uri: imageUrl,
+        headers: { Authorization: `Bearer ${authToken}` },
+    }}
+/>
+
+// Image too large (OOM crash)
+// Fix: Use resizeMode + explicit dimensions
+// Fix: Pre-resize on server (Cloudinary, imgix)
+<Image
+    source={{ uri }}
+    style={{ width: 200, height: 200 }}   // always set explicit size
+    resizeMode="cover"
+/>
+
+// Local image not found
+// Fix: Check require path is relative and correct
+// ❌ require('/assets/image.png')   // absolute path
+// ✅ require('./assets/image.png')  // relative path
+// ✅ require('../assets/image.png') // relative parent
+
+// 3. Flipper → Images plugin
+// Shows all loaded images, their size, and cache status
+// Helps identify oversized images and cache misses
+
+// 4. FastImage debugging
+import FastImage from 'react-native-fast-image';
+FastImage.clearMemoryCache();  // force reload to test fresh load
+console.log('Memory cache cleared');
+```
+
+---
+
+### Q442. How do you debug gestures that aren't working?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Gesture Debugging
+
+**Answer:**
+```js
+// 1. Most common cause: missing GestureHandlerRootView
+// Wrap entire app in GestureHandlerRootView at the root
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+
+const App = () => (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+        <NavigationContainer>
+            <AppNavigator />
+        </NavigationContainer>
+    </GestureHandlerRootView>
+);
+
+// 2. Gesture conflict — two gestures competing
+// Use Gesture.Simultaneous, Gesture.Race, or Gesture.Exclusive
+const panGesture = Gesture.Pan().onUpdate(...);
+const tapGesture = Gesture.Tap().onEnd(...);
+
+// ❌ Two GestureDetectors wrapping the same element
+<GestureDetector gesture={panGesture}>
+    <GestureDetector gesture={tapGesture}>   {/* conflict! */}
+        <Animated.View />
+    </GestureDetector>
+</GestureDetector>
+
+// ✅ Compose gestures
+const composed = Gesture.Race(tapGesture, panGesture);
+<GestureDetector gesture={composed}>
+    <Animated.View />
+</GestureDetector>
+
+// 3. ScrollView consuming touches before your gesture
+// Fix: simultaneousHandlers prop
+<ScrollView
+    ref={scrollRef}
+>
+    <GestureDetector gesture={myGesture.simultaneousWithExternalGesture(scrollRef)}>
+        <Animated.View />
+    </GestureDetector>
+</ScrollView>
+
+// 4. Gesture not recognising in FlatList
+// FlatList has its own scroll gesture — may conflict
+// Fix: Add waitFor or require to coordinate
+const gesture = Gesture.LongPress()
+    .minDuration(300)
+    .shouldCancelWhenOutside(true);
+
+// 5. Debug what's happening in gesture lifecycle
+const debugGesture = Gesture.Pan()
+    .onBegin(() => runOnJS(console.log)('Pan: began'))
+    .onStart(() => runOnJS(console.log)('Pan: started'))
+    .onUpdate((e) => runOnJS(console.log)('Pan: update', e.translationX))
+    .onEnd(() => runOnJS(console.log)('Pan: ended'))
+    .onFinalize(() => runOnJS(console.log)('Pan: finalized'))
+    .onFail(() => runOnJS(console.log)('Pan: FAILED'));
+```
+
+---
+
+### Q443. How do you debug issues with the React Native Hermes engine?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Hermes Debugging
+
+**Answer:**
+```js
+// 1. Verify Hermes is active
+const isHermes = () => !!global.HermesInternal;
+console.log('Running on Hermes:', isHermes());
+
+// 2. Hermes-specific limitations to know:
+// - No eval() (security decision — Hermes doesn't support eval)
+// - No Function constructor: new Function('x', 'return x') → error
+// - Limited RegEx features in older Hermes versions
+// - console.log is async (side effects may delay output)
+
+// 3. Hermes sampling profiler
+// Captures CPU usage during production-like execution
+
+// Enable via Flipper:
+// Flipper → Hermes Debugger → Profiler → Record → interact → Stop
+// Save .cpuprofile → open in Chrome DevTools → Performance tab
+
+// Manually from JS:
+Hermes.enableSamplingProfiler();
+// ... do something heavy ...
+Hermes.disableSamplingProfiler();
+// Profile available in device's Documents folder
+
+// 4. Memory profiler
+// Hermes supports heap snapshots
+// Flipper → Memory → Take snapshot
+// Shows: object allocation by type, retained objects
+
+// 5. Common Hermes issues:
+
+// "SyntaxError: 'async function' is unsupported"
+// Cause: Using newer JS syntax Hermes version doesn't support
+// Fix: Check metro.config.js for correct Babel transforms
+
+// "Cannot find module 'X'"
+// Cause: Dynamic require() with variable path
+// ❌ require(`./screens/${screenName}`)  // dynamic — Hermes can't resolve
+// ✅ Static map of requires:
+const SCREENS = {
+    Home: require('./screens/HomeScreen'),
+    Detail: require('./screens/DetailScreen'),
+};
+const Screen = SCREENS[screenName]?.default;
+
+// "Hermes: JS heap out of memory"
+// Fix: Reduce JS memory usage, clear caches, paginate large data
+```
+
+---
+
+### Q444. How do you use the Network Inspector in Flipper?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Flipper Network
+
+**Answer:**
+```js
+// Setup: Flipper Network plugin is automatically active for React Native
+// (pre-configured in android and ios folders from RN template)
+
+// What it shows:
+// - All fetch() / XMLHttpRequest calls (not native-only calls)
+// - Request URL, method, headers, body
+// - Response status, headers, body
+// - Request timing (DNS, connection, first byte, download)
+// - Certificate info (for HTTPS)
+
+// Limitation: Only shows JS-layer requests (fetch, XHR, axios)
+// Native SDK requests (Google SDK, Facebook SDK, etc.) NOT shown
+// For native traffic → use Charles Proxy or Proxyman
+
+// Force a network request in Flipper for testing
+const testFlipperNetwork = async () => {
+    const res = await fetch('https://jsonplaceholder.typicode.com/todos/1');
+    const data = await res.json();
+    console.log(data); // verify Flipper shows this request
+};
+
+// If not showing up in Flipper:
+// 1. Ensure Flipper NetworkPlugin is enabled
+// 2. Check android/app/src/debug/java/.../ReactNativeFlipper.java
+//    confirms networkFlipperPlugin is added to ReactInstanceManager
+// 3. iOS: FlipperKitNetworkPlugin added in AppDelegate.mm/swift
+
+// Debug TLS/HTTPS issues via Flipper
+// Flipper shows certificate chain details
+// Useful for: certificate pinning failures, expired certs, self-signed certs
+```
+
+---
+
+### Q445. How do you set up Firebase Crashlytics for React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Crash Reporting
+
+**Answer:**
+```bash
+# Install
+npm install @react-native-firebase/app @react-native-firebase/crashlytics
+npx pod-install  # iOS
+
+# Add google-services.json (Android) and GoogleService-Info.plist (iOS)
+# from Firebase Console → Project Settings
+```
+
+```js
+// App.tsx — Crashlytics setup
+import crashlytics from '@react-native-firebase/crashlytics';
+
+// Set user identity for crash reports
+const setupCrashlytics = async (user) => {
+    await crashlytics().setUserId(user.id);
+    await crashlytics().setAttribute('name', user.name);
+    await crashlytics().setAttribute('email', user.email);
+    await crashlytics().setAttribute('role', user.role);
+    await crashlytics().setAttribute('environment', __DEV__ ? 'dev' : 'prod');
+};
+
+// Log custom events (breadcrumbs)
+const logAction = (action: string, params?: Record<string, string>) => {
+    crashlytics().log(`Action: ${action}`);
+    if (params) {
+        Object.entries(params).forEach(([key, value]) => {
+            crashlytics().setAttribute(key, String(value));
+        });
+    }
+};
+
+// Manual crash recording
+try {
+    await processPayroll(month);
+} catch (error) {
+    crashlytics().recordError(error as Error);
+    // Will appear in Firebase Console with full stack trace
+}
+
+// Force a test crash (to verify setup works)
+crashlytics().crash(); // triggers a native crash → verify in Firebase
+
+// Non-fatal error logging
+crashlytics().recordError(new Error('Soft error: optional feature failed'));
+```
+
+```json
+// android/app/build.gradle — enable Crashlytics
+apply plugin: 'com.google.firebase.crashlytics'
+buildTypes {
+    release {
+        firebaseCrashlytics {
+            nativeSymbolUploadEnabled true  // for C++ native crashes
+            unstrippedNativeLibsDir 'build/intermediates/merged_native_libs'
+        }
+    }
+}
+```
+
+---
+
+### Q446. How do you debug Android Gradle build issues?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Android Build Debugging
+
+**Answer:**
+```bash
+# Run Gradle with verbose output
+cd android
+./gradlew assembleDebug --info         # info level
+./gradlew assembleDebug --debug        # debug level (very verbose)
+./gradlew assembleDebug --stacktrace   # full Java stack trace on failure
+
+# Check dependency tree (find version conflicts)
+./gradlew :app:dependencies > deps.txt
+cat deps.txt | grep "conflict\|FAILED\|force"
+
+# Clean build cache (fixes many random issues)
+./gradlew clean
+./gradlew cleanBuildCache
+
+# Check all resolved versions
+./gradlew :app:dependencies --configuration releaseRuntimeClasspath
+```
+
+```groovy
+// Common Gradle issues and fixes:
+
+// 1. Duplicate class error
+// "Duplicate class kotlin.collections.jdk8"
+android {
+    packagingOptions {
+        exclude 'META-INF/DEPENDENCIES'
+    }
+}
+configurations.all {
+    resolutionStrategy.force 'org.jetbrains.kotlin:kotlin-stdlib:1.9.0'
+}
+
+// 2. minSdkVersion conflict
+// Error: "uses-sdk:minSdkVersion X cannot be smaller than version Y"
+android {
+    defaultConfig {
+        minSdkVersion 24  // raise to satisfy library requirement
+    }
+}
+
+// 3. BuildConfig.DEBUG not working
+// Fix: ensure applicationId is set correctly in build.gradle
+
+// 4. Task :app:compileDebugKotlin FAILED
+// Usually a Kotlin compilation error in native module
+// Read the error carefully — usually a straightforward code error
+
+// 5. React Native version mismatch
+// Error: "Package X requires React Native >= 0.71"
+// Fix: Update react-native in package.json and rebuild
+```
+
+---
+
+### Q447. How do you debug iOS CocoaPods issues?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** iOS Build Debugging
+
+**Answer:**
+```bash
+# Common pod install issues:
+
+# 1. "No Podspec found for 'X'" 
+# Fix: clear caches and try again
+pod cache clean --all
+cd ios && pod install --repo-update
+
+# 2. Slow pod install (downloads every time)
+# Fix: CocoaPods cache is local — should be fast on repeat installs
+# If slow: check ~/.cocoapods/repos/trunk size
+
+# 3. Version conflict between pods
+pod install --verbose 2>&1 | grep "conflict\|error"
+
+# Resolve with explicit versions in Podfile:
+pod 'Firebase/Core', '10.18.0'  # pin exact version
+
+# 4. "CDN: trunk Repo update failed"
+pod repo update  # update trunk repo
+pod install
+
+# If still failing (common in corporate networks):
+pod install --without-repo-update  # skip remote repo check
+
+# 5. Xcode build fails after pod install
+# Clean derived data
+rm -rf ~/Library/Developer/Xcode/DerivedData
+xcodebuild clean -workspace MyApp.xcworkspace -scheme MyApp
+
+# 6. Header not found errors
+# Fix: pod deintegrate && pod install
+cd ios
+pod deintegrate
+pod install
+```
+
+```ruby
+# Podfile debugging tips
+# ios/Podfile
+
+# See what version is being used
+puts "React Native version: #{react_native_version}"
+
+# Force specific versions
+pod 'hermes-engine', :podspec => '../node_modules/react-native/sdks/hermes-engine/hermes-engine.podspec'
+
+# Exclude arm64 for simulator (M1 Mac sometimes needed)
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'arm64'
+    end
+  end
+end
+```
+
+---
+
+### Q448. How do you debug issues with metro bundler?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Metro Debugging
+
+**Answer:**
+```bash
+# Start with verbose logging
+npx react-native start --verbose
+
+# Reset Metro cache (fixes most Metro issues)
+npx react-native start --reset-cache
+
+# OR
+npx expo start -c  # clear cache (Expo)
+
+# Check Metro configuration
+cat metro.config.js  # verify correct configuration
+```
+
+```js
+// Common Metro issues:
+
+// 1. "Unable to resolve module 'X' from 'Y'"
+// Module not found despite being installed
+// Fix 1: Check spelling, case sensitivity
+// Fix 2: Delete node_modules and reinstall
+// rm -rf node_modules && npm install
+// Fix 3: Reset Metro cache
+// Fix 4: Check package.json "main" field of the problematic package
+
+// 2. "jest-haste-map: Haste module naming collision: X"
+// Two modules with the same name (common with react-native-vector-icons)
+// Fix: Add hasteImpl or module resolver in metro.config.js
+module.exports = {
+    resolver: {
+        // Exclude problematic duplicate
+        blacklistRE: /node_modules\/some-package\/duplicate-file\.js/,
+    },
+};
+
+// 3. "Error watching file for changes: EMFILE"
+// Too many open files (macOS limit)
+// Fix: 
+// echo kern.maxfiles=65536 | sudo tee -a /etc/sysctl.conf
+// ulimit -n 65536
+
+// 4. Metro not picking up file changes (TypeScript)
+// Fix: Check tsconfig paths are watched by Metro
+module.exports = {
+    watchFolders: ['../shared-code'], // include folders outside project root
+    resolver: {
+        extraNodeModules: {
+            '@shared': path.resolve(__dirname, '../shared-code'),
+        },
+    },
+};
+
+// 5. Slow bundle times
+// Fix: Enable incremental builds
+module.exports = {
+    transformer: {
+        getTransformOptions: async () => ({
+            transform: {
+                experimentalImportSupport: false,
+                inlineRequires: true, // defer requires = faster startup
+            },
+        }),
+    },
+};
+```
+
+---
+
+### Q449. How do you debug accessibility issues in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Accessibility Debugging
+
+**Answer:**
+```bash
+# iOS: Enable VoiceOver
+# Settings → Accessibility → VoiceOver → On
+# OR: Triple-click side button (if accessibility shortcut enabled)
+# Swipe right/left to navigate elements
+# Double tap to activate
+
+# Android: Enable TalkBack
+# Settings → Accessibility → TalkBack → On
+# OR: Hold both volume buttons for 3 seconds
+# Swipe right/left to navigate
+# Double tap to activate
+
+# iOS: Accessibility Inspector (Mac)
+# Xcode → Open Developer Tool → Accessibility Inspector
+# Can inspect any running simulator/device
+# Shows: accessibility label, value, hint, traits, frame
+```
+
+```js
+// Common accessibility issues and how to debug:
+
+// 1. Screen reader skipping interactive elements
+// Cause: Missing accessibilityLabel or role
+// Debug: accessibility inspector shows "No label"
+// Fix:
+<Pressable
+    accessibilityRole="button"
+    accessibilityLabel="Delete employee Devesh Kumar"
+    accessibilityHint="Removes this employee from the list"
+>
+    <Icon name="delete" />
+</Pressable>
+
+// 2. Elements announced in wrong order
+// Debug: Use VoiceOver/TalkBack to navigate — listen to order
+// Fix: Use accessibilityViewIsModal for modals, importantForAccessibility
+
+// 3. Interactive elements behind modal not tappable but still reachable by screen reader
+// Fix: Use Modal component with importantForAccessibility="no-hide-descendants"
+<Modal visible={isOpen} accessible={true}>
+    <View
+        accessibilityViewIsModal={true}  // blocks VoiceOver from reaching behind modal
+    >
+        <Content />
+    </View>
+</Modal>
+
+// 4. Check accessibility roles are correct
+// accessibilityRole options:
+// 'none', 'button', 'link', 'search', 'image', 'adjustable',
+// 'imagebutton', 'header', 'summary', 'alert', 'checkbox',
+// 'combobox', 'menu', 'menubar', 'menuitem', 'progressbar',
+// 'radio', 'radiogroup', 'scrollbar', 'spinbutton', 'switch',
+// 'tab', 'tablist', 'timer', 'toolbar'
+
+// 5. Test with reduced motion
+AccessibilityInfo.isReduceMotionEnabled().then(reduced => {
+    console.log('Reduce motion:', reduced);
+    // Adjust animations accordingly
+});
+
+// 6. Listen for screen reader state
+const [screenReaderEnabled, setScreenReaderEnabled] = useState(false);
+useEffect(() => {
+    AccessibilityInfo.isScreenReaderEnabled().then(setScreenReaderEnabled);
+    const sub = AccessibilityInfo.addEventListener('screenReaderChanged', setScreenReaderEnabled);
+    return () => sub.remove();
+}, []);
+```
+
+---
+
+### Q450. How do you implement a comprehensive debugging strategy for production React Native apps?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Very High | **Category:** Production Debugging Strategy
+
+**Answer:**
+```js
+// Layer 1: Crash reporting (Sentry)
+// Catches: unhandled exceptions, native crashes
+// Setup: see Q431
+
+// Layer 2: Custom error boundaries (all screens)
+// Catches: render-time React errors
+const withErrorBoundary = (Component, fallback) =>
+    class extends React.Component {
+        state = { hasError: false, error: null };
+        static getDerivedStateFromError(error) { return { hasError: true, error }; }
+        componentDidCatch(error, info) {
+            Sentry.captureException(error, { extra: { componentStack: info.componentStack } });
+        }
+        render() {
+            if (this.state.hasError) return fallback || <DefaultErrorFallback />;
+            return <Component {...this.props} />;
+        }
+    };
+
+// Layer 3: API error logging
+const apiClient = axios.create({ baseURL: API_URL });
+apiClient.interceptors.response.use(
+    res => res,
+    error => {
+        Sentry.captureException(error, {
+            tags: {
+                api_url: error.config?.url,
+                api_method: error.config?.method,
+                api_status: error.response?.status,
+            },
+        });
+        return Promise.reject(error);
+    }
+);
+
+// Layer 4: Custom analytics events (for business debugging)
+const track = (event, props) => {
+    analytics.logEvent(event, props);
+    // Also send to debug channel in dev
+    if (__DEV__) {
+        console.log(`[Analytics] ${event}:`, props);
+    }
+};
+
+// Layer 5: Performance monitoring
+// Sentry transactions for slow operations:
+const monitoredFetch = async (name, fn) => {
+    const transaction = Sentry.startTransaction({ name });
+    try {
+        const result = await fn();
+        return result;
+    } catch (error) {
+        transaction.setStatus('internal_error');
+        throw error;
+    } finally {
+        transaction.finish();
+    }
+};
+
+// Layer 6: Remote log streaming (for specific users)
+// Debug a specific user's session without affecting others
+const remoteLogger = {
+    log: (message, data) => {
+        if (currentUser.id === DEBUG_USER_ID || isDebugMode) {
+            sendToRemoteLog({ level: 'info', message, data, timestamp: Date.now() });
+        }
+    },
+};
+
+// Layer 7: Feedback button (in-app debugging aid)
+const DebugFeedback = () => {
+    if (!__DEV__ && !isBeta) return null;
+    return (
+        <Pressable
+            onPress={() => {
+                const state = store.getState();
+                const navState = navigationRef.current?.getState();
+                Sentry.captureMessage('User feedback', {
+                    extra: { reduxState: state, navState },
+                });
+                Alert.alert('Debug info sent to Sentry!');
+            }}
+            style={styles.debugButton}
+        >
+            <Text>🐛</Text>
+        </Pressable>
+    );
+};
+
+// Environment-specific debugging config
+const debugConfig = {
+    development: {
+        logLevel: 'verbose',
+        showPerformanceOverlay: true,
+        enableNetworkLogging: true,
+        sentryEnabled: false,     // too noisy in dev
+    },
+    staging: {
+        logLevel: 'debug',
+        showPerformanceOverlay: false,
+        enableNetworkLogging: true,
+        sentryEnabled: true,      // catch staging issues
+        tracesSampleRate: 1.0,   // 100% performance traces in staging
+    },
+    production: {
+        logLevel: 'error',
+        showPerformanceOverlay: false,
+        enableNetworkLogging: false,
+        sentryEnabled: true,
+        tracesSampleRate: 0.1,  // 10% performance in prod
+    },
+};
+```
+
+---
+
+## Sections Overview (Q451–Q500)
+
+| Section | Questions | Topics |
+|---------|-----------|--------|
+| Storage & Permissions | Q451–Q480 | AsyncStorage, Keychain, permission flows |
+| Miscellaneous | Q481–Q500 | Accessibility, internationalisation, misc APIs |
+
+---
+
+> 💡 **Tip for GitHub:** Add a `## Table of Contents` section at the top with anchor links to each question for easy navigation.
+
+---
+
+*Part 01 of 8 — [← Back to Part README](./README.md) · [← Main README](../README.md)*
