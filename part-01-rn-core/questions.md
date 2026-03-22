@@ -18970,3 +18970,3480 @@ npm install expo@canary
 ---
 
 *Part 01 of 8 — [← Back to Part README](./README.md) · [← Main README](../README.md)*
+
+## Section 10: Testing (Q371–Q420)
+
+---
+
+### Q371. What is the React Native testing pyramid?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Testing Strategy
+
+**Answer:**
+The testing pyramid defines three layers of tests, each with different speed, cost, and coverage tradeoffs:
+
+```
+        ▲
+       /E\       E2E Tests (Detox / Maestro)
+      /   \      — Slowest, most realistic, fewest
+     /-----\
+    / Integ  \   Integration Tests (React Native Testing Library)
+   /    ration \  — Medium speed, test component trees
+  /─────────────\
+ /  Unit Tests   \ Unit Tests (Jest)
+/─────────────────\ — Fastest, most isolated, most numerous
+```
+
+```
+Layer      | Tool              | What to test                     | Count
+───────────────────────────────────────────────────────────────────────
+Unit       | Jest              | Utilities, hooks, reducers        | Many (70%)
+Integration| RNTL              | Component + child interactions    | Some (20%)
+E2E        | Detox / Maestro   | Critical user journeys            | Few (10%)
+```
+
+```js
+// Unit test — isolated, fast, no rendering
+test('formatCurrency formats INR correctly', () => {
+    expect(formatCurrency(85000, 'INR')).toBe('₹85,000');
+    expect(formatCurrency(0, 'INR')).toBe('₹0');
+});
+
+// Integration test — renders component tree, tests behaviour
+test('LoginForm submits credentials', async () => {
+    const onLogin = jest.fn();
+    render(<LoginForm onLogin={onLogin} />);
+    fireEvent.changeText(screen.getByPlaceholderText('Email'), 'dev@test.com');
+    fireEvent.changeText(screen.getByPlaceholderText('Password'), 'password123');
+    fireEvent.press(screen.getByText('Login'));
+    await waitFor(() => expect(onLogin).toHaveBeenCalledWith('dev@test.com', 'password123'));
+});
+
+// E2E test — real app, real device
+describe('Login flow', () => {
+    it('should log in and land on dashboard', async () => {
+        await element(by.id('email-input')).typeText('dev@test.com');
+        await element(by.id('password-input')).typeText('password123');
+        await element(by.id('login-button')).tap();
+        await expect(element(by.id('dashboard-screen'))).toBeVisible();
+    });
+});
+```
+
+**Follow-up:** What percentage of your ERP app was covered by tests? → We maintained ~65% unit + integration coverage with Jest/RNTL for business-critical flows (payroll, attendance, leave management). E2E with Detox covered the 5 core user journeys.
+
+---
+
+### Q372. How do you set up Jest for a React Native project?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Jest Setup
+
+**Answer:**
+```bash
+# React Native CLI — Jest is pre-configured
+# package.json already has jest config after init
+
+# Expo — also pre-configured
+npx expo install jest-expo --save-dev
+
+# Install testing utilities
+npm install --save-dev @testing-library/react-native
+npm install --save-dev @testing-library/jest-native  # custom matchers
+npm install --save-dev @testing-library/user-event    # user interactions
+```
+
+```json
+// package.json — Jest configuration
+{
+  "jest": {
+    "preset": "react-native",
+    // OR for Expo:
+    // "preset": "jest-expo",
+
+    "setupFilesAfterFramework": [
+      "@testing-library/jest-native/extend-expect"
+    ],
+    "setupFiles": [
+      "./jest.setup.js"
+    ],
+    "transformIgnorePatterns": [
+      "node_modules/(?!(react-native|@react-native|@react-navigation|react-native-reanimated|react-native-gesture-handler)/)"
+    ],
+    "moduleNameMapper": {
+      "\\.(png|jpg|jpeg|gif|svg)$": "<rootDir>/__mocks__/fileMock.js",
+      "\\.(mp4|mp3|wav)$": "<rootDir>/__mocks__/fileMock.js"
+    },
+    "collectCoverageFrom": [
+      "src/**/*.{ts,tsx}",
+      "!src/**/*.d.ts",
+      "!src/**/*.stories.tsx"
+    ],
+    "coverageThreshold": {
+      "global": {
+        "branches": 60,
+        "functions": 70,
+        "lines": 70
+      }
+    }
+  }
+}
+```
+
+```js
+// jest.setup.js — global setup
+import 'react-native-gesture-handler/jestSetup';
+
+// Mock Reanimated
+jest.mock('react-native-reanimated', () => {
+    const Reanimated = require('react-native-reanimated/mock');
+    Reanimated.default.call = jest.fn();
+    return Reanimated;
+});
+
+// Silence yellow box warnings in tests
+jest.mock('react-native/Libraries/Animated/NativeAnimatedHelper');
+
+// Mock AsyncStorage
+jest.mock('@react-native-async-storage/async-storage',
+    () => require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
+```
+
+```js
+// __mocks__/fileMock.js
+module.exports = 'test-file-stub';
+```
+
+---
+
+### Q373. What is React Native Testing Library (RNTL) and how does it differ from Enzyme?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** RNTL
+
+**Answer:**
+React Native Testing Library (RNTL) is the recommended testing library for React Native. It renders components and lets you query/interact with them in a way that mirrors user behaviour.
+
+**RNTL vs Enzyme:**
+
+| | RNTL | Enzyme |
+|--|------|--------|
+| Philosophy | Test behaviour (what user sees) | Test implementation (component internals) |
+| Query style | By text, label, role, testID | By component name, props, state |
+| Maintenance | ✅ Actively maintained | ❌ Deprecated |
+| Resilience | Refactor-friendly | Brittle (breaks on rename/restructure) |
+
+```js
+import { render, screen, fireEvent, waitFor } from '@testing-library/react-native';
+
+// Queries — multiple ways to find elements
+const el = screen.getByText('Submit');              // exact text match
+const el = screen.getByRole('button', { name: 'Submit' }); // by accessibility role
+const el = screen.getByTestId('submit-button');     // by testID prop
+const el = screen.getByPlaceholderText('Email');    // by placeholder
+const el = screen.getByLabelText('Email address'); // by accessibilityLabel
+const el = screen.getByDisplayValue('devesh@...');  // current input value
+
+// queryBy — returns null if not found (no throw)
+const el = screen.queryByText('Error message');     // null if not present
+expect(el).toBeNull();
+
+// findBy — async, waits for element to appear
+const el = await screen.findByText('Loading complete'); // waits
+
+// getAllBy / queryAllBy / findAllBy — multiple elements
+const buttons = screen.getAllByRole('button');
+
+// Custom matchers (@testing-library/jest-native)
+expect(el).toBeVisible();
+expect(el).toBeDisabled();
+expect(el).toHaveTextContent('Hello');
+expect(el).toHaveProp('style', expect.objectContaining({ color: 'red' }));
+```
+
+---
+
+### Q374. How do you write a unit test for a React hook?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Hook Testing
+
+**Answer:**
+```js
+// src/hooks/useCounter.ts
+export const useCounter = (initial = 0) => {
+    const [count, setCount] = useState(initial);
+    const increment = useCallback(() => setCount(c => c + 1), []);
+    const decrement = useCallback(() => setCount(c => c - 1), []);
+    const reset = useCallback(() => setCount(initial), [initial]);
+    return { count, increment, decrement, reset };
+};
+
+// useCounter.test.ts
+import { renderHook, act } from '@testing-library/react-native';
+import { useCounter } from '../hooks/useCounter';
+
+describe('useCounter', () => {
+    it('initialises with default value 0', () => {
+        const { result } = renderHook(() => useCounter());
+        expect(result.current.count).toBe(0);
+    });
+
+    it('initialises with custom value', () => {
+        const { result } = renderHook(() => useCounter(10));
+        expect(result.current.count).toBe(10);
+    });
+
+    it('increments count', () => {
+        const { result } = renderHook(() => useCounter());
+        act(() => { result.current.increment(); });
+        expect(result.current.count).toBe(1);
+    });
+
+    it('decrements count', () => {
+        const { result } = renderHook(() => useCounter(5));
+        act(() => { result.current.decrement(); });
+        expect(result.current.count).toBe(4);
+    });
+
+    it('resets to initial value', () => {
+        const { result } = renderHook(() => useCounter(3));
+        act(() => { result.current.increment(); result.current.increment(); });
+        expect(result.current.count).toBe(5);
+        act(() => { result.current.reset(); });
+        expect(result.current.count).toBe(3);
+    });
+});
+```
+
+```js
+// Testing async hooks
+import { renderHook, waitFor } from '@testing-library/react-native';
+
+const useEmployees = () => {
+    const [employees, setEmployees] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        fetchEmployees().then(data => {
+            setEmployees(data);
+            setLoading(false);
+        });
+    }, []);
+
+    return { employees, loading };
+};
+
+// Test with API mock
+jest.mock('../api/employees', () => ({
+    fetchEmployees: jest.fn().mockResolvedValue([
+        { id: 1, name: 'Devesh Kumar' },
+        { id: 2, name: 'Priya Singh' },
+    ]),
+}));
+
+test('loads employees', async () => {
+    const { result } = renderHook(() => useEmployees());
+
+    // Initially loading
+    expect(result.current.loading).toBe(true);
+    expect(result.current.employees).toHaveLength(0);
+
+    // After fetch resolves
+    await waitFor(() => {
+        expect(result.current.loading).toBe(false);
+    });
+    expect(result.current.employees).toHaveLength(2);
+    expect(result.current.employees[0].name).toBe('Devesh Kumar');
+});
+```
+
+---
+
+### Q375. How do you mock modules in Jest?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Jest Mocking
+
+**Answer:**
+```js
+// 1. Auto-mock an entire module
+jest.mock('../api/userApi');
+// All exports become jest.fn() — return undefined by default
+
+// 2. Manual mock with implementation
+jest.mock('../api/userApi', () => ({
+    fetchUser: jest.fn().mockResolvedValue({ id: 1, name: 'Devesh' }),
+    updateUser: jest.fn().mockResolvedValue({ success: true }),
+    deleteUser: jest.fn().mockRejectedValue(new Error('Forbidden')),
+}));
+
+// 3. Mock a React Native module
+jest.mock('react-native', () => {
+    const RN = jest.requireActual('react-native');
+    return {
+        ...RN,
+        Alert: { alert: jest.fn() },
+        Linking: { openURL: jest.fn().mockResolvedValue(true) },
+        Platform: { OS: 'ios', select: jest.fn(obj => obj.ios) },
+    };
+});
+
+// 4. Mock per-test (restore between tests)
+import { fetchUser } from '../api/userApi';
+const mockFetchUser = fetchUser as jest.MockedFunction<typeof fetchUser>;
+
+beforeEach(() => {
+    mockFetchUser.mockResolvedValue({ id: 1, name: 'Devesh' });
+});
+
+test('handles API error', async () => {
+    mockFetchUser.mockRejectedValueOnce(new Error('Network error'));
+    // test error handling
+});
+
+// 5. Spy on module method (observe without replacing)
+import * as Analytics from '../utils/analytics';
+const trackSpy = jest.spyOn(Analytics, 'trackEvent');
+
+test('tracks login event', () => {
+    fireEvent.press(screen.getByText('Login'));
+    expect(trackSpy).toHaveBeenCalledWith('login', { method: 'email' });
+});
+
+afterEach(() => { trackSpy.mockRestore(); });
+
+// 6. Mock with different values per test
+test('shows error when fetch fails', async () => {
+    jest.mocked(fetchUser).mockRejectedValueOnce(new Error('Server error'));
+    render(<UserProfile userId="1" />);
+    await screen.findByText('Failed to load user');
+});
+```
+
+---
+
+### Q376. How do you test a React Native component with RNTL?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** RNTL Component Testing
+
+**Answer:**
+```js
+// src/components/EmployeeCard.tsx
+const EmployeeCard = ({ employee, onPress, onDelete }) => (
+    <Pressable testID="employee-card" onPress={() => onPress(employee.id)}>
+        <View>
+            <Text testID="employee-name">{employee.name}</Text>
+            <Text testID="employee-role">{employee.role}</Text>
+            <Text testID="employee-dept">{employee.department}</Text>
+            {employee.isActive
+                ? <View testID="active-badge" accessibilityLabel="Active" />
+                : <View testID="inactive-badge" accessibilityLabel="Inactive" />
+            }
+            <Pressable
+                testID="delete-button"
+                accessibilityLabel={`Delete ${employee.name}`}
+                onPress={() => onDelete(employee.id)}
+            >
+                <Text>Delete</Text>
+            </Pressable>
+        </View>
+    </Pressable>
+);
+
+// EmployeeCard.test.tsx
+import { render, screen, fireEvent } from '@testing-library/react-native';
+import { EmployeeCard } from '../EmployeeCard';
+
+const mockEmployee = {
+    id: '42',
+    name: 'Devesh Kumar Singh',
+    role: 'React Native Developer',
+    department: 'Engineering',
+    isActive: true,
+};
+
+describe('EmployeeCard', () => {
+    it('renders employee information', () => {
+        render(<EmployeeCard employee={mockEmployee} onPress={jest.fn()} onDelete={jest.fn()} />);
+
+        expect(screen.getByTestId('employee-name')).toHaveTextContent('Devesh Kumar Singh');
+        expect(screen.getByTestId('employee-role')).toHaveTextContent('React Native Developer');
+        expect(screen.getByTestId('employee-dept')).toHaveTextContent('Engineering');
+    });
+
+    it('shows active badge for active employee', () => {
+        render(<EmployeeCard employee={mockEmployee} onPress={jest.fn()} onDelete={jest.fn()} />);
+        expect(screen.getByLabelText('Active')).toBeTruthy();
+        expect(screen.queryByLabelText('Inactive')).toBeNull();
+    });
+
+    it('shows inactive badge for inactive employee', () => {
+        render(<EmployeeCard employee={{ ...mockEmployee, isActive: false }}
+            onPress={jest.fn()} onDelete={jest.fn()} />);
+        expect(screen.getByLabelText('Inactive')).toBeTruthy();
+    });
+
+    it('calls onPress with employee id when card is tapped', () => {
+        const onPress = jest.fn();
+        render(<EmployeeCard employee={mockEmployee} onPress={onPress} onDelete={jest.fn()} />);
+
+        fireEvent.press(screen.getByTestId('employee-card'));
+        expect(onPress).toHaveBeenCalledWith('42');
+        expect(onPress).toHaveBeenCalledTimes(1);
+    });
+
+    it('calls onDelete with employee id when delete is tapped', () => {
+        const onDelete = jest.fn();
+        render(<EmployeeCard employee={mockEmployee} onPress={jest.fn()} onDelete={onDelete} />);
+
+        fireEvent.press(screen.getByLabelText('Delete Devesh Kumar Singh'));
+        expect(onDelete).toHaveBeenCalledWith('42');
+    });
+});
+```
+
+---
+
+### Q377. How do you test asynchronous behaviour (API calls) in RNTL?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Very High | **Category:** Async Testing
+
+**Answer:**
+```js
+// Component under test
+const EmployeeList = () => {
+    const [employees, setEmployees] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+
+    const load = async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const data = await fetchEmployees();
+            setEmployees(data);
+        } catch (e) {
+            setError(e.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => { load(); }, []);
+
+    if (loading) return <ActivityIndicator testID="loader" />;
+    if (error) return <Text testID="error-message">{error}</Text>;
+    return (
+        <FlatList
+            testID="employee-list"
+            data={employees}
+            keyExtractor={e => e.id}
+            renderItem={({ item }) => <Text testID={`employee-${item.id}`}>{item.name}</Text>}
+        />
+    );
+};
+
+// Test file
+import { render, screen, waitFor, act } from '@testing-library/react-native';
+import { fetchEmployees } from '../api';
+jest.mock('../api');
+
+describe('EmployeeList', () => {
+    // Happy path
+    it('shows employees after loading', async () => {
+        (fetchEmployees as jest.Mock).mockResolvedValue([
+            { id: '1', name: 'Devesh Kumar' },
+            { id: '2', name: 'Priya Singh' },
+        ]);
+
+        render(<EmployeeList />);
+
+        // Shows loader initially
+        expect(screen.getByTestId('loader')).toBeTruthy();
+
+        // Waits for async update
+        await waitFor(() => {
+            expect(screen.queryByTestId('loader')).toBeNull();
+        });
+
+        // Shows employees
+        expect(screen.getByTestId('employee-1')).toHaveTextContent('Devesh Kumar');
+        expect(screen.getByTestId('employee-2')).toHaveTextContent('Priya Singh');
+    });
+
+    // Error path
+    it('shows error message on API failure', async () => {
+        (fetchEmployees as jest.Mock).mockRejectedValue(new Error('Network error'));
+
+        render(<EmployeeList />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('error-message')).toHaveTextContent('Network error');
+        });
+        expect(screen.queryByTestId('loader')).toBeNull();
+    });
+
+    // Empty state
+    it('shows empty list when no employees', async () => {
+        (fetchEmployees as jest.Mock).mockResolvedValue([]);
+
+        render(<EmployeeList />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('employee-list')).toBeTruthy();
+        });
+        expect(screen.queryByTestId('employee-1')).toBeNull();
+    });
+});
+```
+
+---
+
+### Q378. How do you test navigation in React Native?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Navigation Testing
+
+**Answer:**
+```js
+// Option 1: Mock navigation object (unit test style)
+const createMockNavigation = () => ({
+    navigate: jest.fn(),
+    goBack: jest.fn(),
+    replace: jest.fn(),
+    push: jest.fn(),
+    reset: jest.fn(),
+    setOptions: jest.fn(),
+    addListener: jest.fn(() => jest.fn()), // returns unsubscribe fn
+    isFocused: jest.fn().mockReturnValue(true),
+    getParam: jest.fn(),
+    dispatch: jest.fn(),
+});
+
+test('navigates to detail on employee press', () => {
+    const navigation = createMockNavigation();
+    const route = { params: { departmentId: 'eng' } };
+
+    render(<EmployeeList navigation={navigation} route={route} />);
+
+    fireEvent.press(screen.getByText('Devesh Kumar'));
+
+    expect(navigation.navigate).toHaveBeenCalledWith('EmployeeDetail', { employeeId: '1' });
+});
+
+// Option 2: Render with full NavigationContainer (integration test)
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+
+const Stack = createNativeStackNavigator();
+
+const TestNavigator = ({ initialRouteName = 'EmployeeList' }) => (
+    <NavigationContainer>
+        <Stack.Navigator initialRouteName={initialRouteName}>
+            <Stack.Screen name="EmployeeList" component={EmployeeList} />
+            <Stack.Screen name="EmployeeDetail" component={EmployeeDetail} />
+        </Stack.Navigator>
+    </NavigationContainer>
+);
+
+test('navigates to detail and shows employee info', async () => {
+    render(<TestNavigator />);
+
+    // EmployeeList is showing
+    await screen.findByText('Devesh Kumar');
+
+    // Tap to navigate
+    fireEvent.press(screen.getByText('Devesh Kumar'));
+
+    // EmployeeDetail loads
+    await screen.findByText('React Native Developer'); // role shown in detail
+});
+
+// Option 3: useNavigation mock (for components that use the hook)
+jest.mock('@react-navigation/native', () => ({
+    ...jest.requireActual('@react-navigation/native'),
+    useNavigation: () => ({ navigate: jest.fn(), goBack: jest.fn() }),
+    useRoute: () => ({ params: { employeeId: '42' } }),
+    useFocusEffect: jest.fn(cb => cb()),
+}));
+```
+
+---
+
+### Q379. How do you test Redux (or Zustand) connected components?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** State Management Testing
+
+**Answer:**
+```js
+// Redux — wrap with Provider in tests
+import { Provider } from 'react-redux';
+import { configureStore } from '@reduxjs/toolkit';
+import { employeesSlice } from '../store/employeesSlice';
+
+// Create a test store factory
+const createTestStore = (preloadedState = {}) =>
+    configureStore({
+        reducer: { employees: employeesSlice.reducer },
+        preloadedState,
+    });
+
+// Custom render helper
+const renderWithRedux = (ui, { preloadedState = {}, store = createTestStore(preloadedState) } = {}) => {
+    const Wrapper = ({ children }) => <Provider store={store}>{children}</Provider>;
+    return { store, ...render(ui, { wrapper: Wrapper }) };
+};
+
+// Test
+test('displays employees from Redux store', async () => {
+    const { store } = renderWithRedux(<EmployeeListScreen />, {
+        preloadedState: {
+            employees: {
+                list: [{ id: '1', name: 'Devesh Kumar', role: 'Developer' }],
+                loading: false,
+                error: null,
+            },
+        },
+    });
+
+    expect(screen.getByText('Devesh Kumar')).toBeTruthy();
+});
+
+test('dispatches fetchEmployees on mount', async () => {
+    const { store } = renderWithRedux(<EmployeeListScreen />);
+    const dispatchSpy = jest.spyOn(store, 'dispatch');
+    // wait for mount effect
+    await waitFor(() => {
+        expect(dispatchSpy).toHaveBeenCalled();
+    });
+});
+```
+
+```js
+// Zustand — reset store between tests
+import { create } from 'zustand';
+import { useEmployeeStore } from '../store/employeeStore';
+
+// Reset Zustand store between tests
+beforeEach(() => {
+    useEmployeeStore.setState({
+        employees: [],
+        loading: false,
+        error: null,
+    });
+});
+
+test('add employee updates store and rerenders', async () => {
+    render(<EmployeeForm />);
+
+    fireEvent.changeText(screen.getByPlaceholderText('Employee name'), 'Priya Singh');
+    fireEvent.press(screen.getByText('Add Employee'));
+
+    await waitFor(() => {
+        const { employees } = useEmployeeStore.getState();
+        expect(employees).toHaveLength(1);
+        expect(employees[0].name).toBe('Priya Singh');
+    });
+});
+```
+
+---
+
+### Q380. What is `act()` and when do you need it explicitly?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Testing Internals
+
+**Answer:**
+`act()` ensures that all pending state updates, effects, and re-renders are processed before you make assertions. React Testing Library wraps most interactions in `act()` automatically.
+
+```js
+import { act, render } from '@testing-library/react-native';
+
+// ✅ RNTL automatically wraps these in act():
+fireEvent.press(button);          // automatic act()
+fireEvent.changeText(input, 'x'); // automatic act()
+await waitFor(() => ...);         // automatic act()
+await findByText('...');          // automatic act()
+
+// ❌ You need explicit act() when:
+// 1. Triggering state updates outside RNTL helpers
+
+test('timer updates count', async () => {
+    jest.useFakeTimers();
+    render(<CountdownTimer seconds={5} />);
+
+    // Fast-forward timer — must wrap in act() because it triggers state update
+    act(() => {
+        jest.advanceTimersByTime(3000);
+    });
+
+    expect(screen.getByText('2')).toBeTruthy();
+    jest.useRealTimers();
+});
+
+// 2. Resolving promises that update state
+test('async state update', async () => {
+    const { rerender } = render(<MyComponent />);
+
+    await act(async () => {
+        await someAsyncOperation(); // triggers state update
+    });
+
+    expect(screen.getByText('Updated')).toBeTruthy();
+});
+
+// Common warning: "Warning: An update to Component inside a test was not wrapped in act(...)"
+// Fix: wrap the trigger in act() or use waitFor()
+```
+
+---
+
+### Q381. How do you test a form with validation?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** RNTL Forms
+
+**Answer:**
+```js
+// LoginForm.tsx
+const LoginForm = ({ onSubmit }) => {
+    const { control, handleSubmit, formState: { errors } } = useForm({
+        resolver: zodResolver(loginSchema),
+    });
+
+    return (
+        <View>
+            <Controller
+                control={control}
+                name="email"
+                render={({ field: { onChange, value } }) => (
+                    <TextInput
+                        testID="email-input"
+                        placeholder="Email"
+                        value={value}
+                        onChangeText={onChange}
+                        accessibilityLabel="Email address"
+                    />
+                )}
+            />
+            {errors.email && (
+                <Text testID="email-error">{errors.email.message}</Text>
+            )}
+
+            <Controller
+                control={control}
+                name="password"
+                render={({ field: { onChange, value } }) => (
+                    <TextInput
+                        testID="password-input"
+                        placeholder="Password"
+                        secureTextEntry
+                        value={value}
+                        onChangeText={onChange}
+                    />
+                )}
+            />
+            {errors.password && (
+                <Text testID="password-error">{errors.password.message}</Text>
+            )}
+
+            <Pressable testID="submit-button" onPress={handleSubmit(onSubmit)}>
+                <Text>Login</Text>
+            </Pressable>
+        </View>
+    );
+};
+
+// LoginForm.test.tsx
+describe('LoginForm', () => {
+    it('shows validation errors for empty submission', async () => {
+        const onSubmit = jest.fn();
+        render(<LoginForm onSubmit={onSubmit} />);
+
+        fireEvent.press(screen.getByTestId('submit-button'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('email-error')).toHaveTextContent('Email is required');
+            expect(screen.getByTestId('password-error')).toHaveTextContent('Password is required');
+        });
+        expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it('shows invalid email error', async () => {
+        render(<LoginForm onSubmit={jest.fn()} />);
+        fireEvent.changeText(screen.getByTestId('email-input'), 'not-an-email');
+        fireEvent.press(screen.getByTestId('submit-button'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('email-error')).toHaveTextContent('Invalid email');
+        });
+    });
+
+    it('submits with valid credentials', async () => {
+        const onSubmit = jest.fn();
+        render(<LoginForm onSubmit={onSubmit} />);
+
+        fireEvent.changeText(screen.getByTestId('email-input'), 'devesh@example.com');
+        fireEvent.changeText(screen.getByTestId('password-input'), 'password123');
+        fireEvent.press(screen.getByTestId('submit-button'));
+
+        await waitFor(() => {
+            expect(onSubmit).toHaveBeenCalledWith({
+                email: 'devesh@example.com',
+                password: 'password123',
+            });
+        });
+    });
+});
+```
+
+---
+
+### Q382. How do you mock `AsyncStorage` in Jest?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Mocking Native Modules
+
+**Answer:**
+```js
+// Option 1: Use the official mock package
+// jest.setup.js
+jest.mock('@react-native-async-storage/async-storage',
+    () => require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
+
+// The mock is an in-memory store that resets between test files
+// (but NOT between tests in the same file unless you clear it)
+
+// Test using the mock
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+test('saves and retrieves auth token', async () => {
+    // Save
+    await AsyncStorage.setItem('authToken', 'jwt-token-123');
+
+    // Retrieve
+    const token = await AsyncStorage.getItem('authToken');
+    expect(token).toBe('jwt-token-123');
+});
+
+// Clear between tests
+afterEach(async () => {
+    await AsyncStorage.clear();
+});
+
+// Option 2: Manual mock (more control)
+jest.mock('@react-native-async-storage/async-storage', () => {
+    let store: Record<string, string> = {};
+    return {
+        setItem: jest.fn((key, value) => { store[key] = value; return Promise.resolve(); }),
+        getItem: jest.fn((key) => Promise.resolve(store[key] ?? null)),
+        removeItem: jest.fn((key) => { delete store[key]; return Promise.resolve(); }),
+        clear: jest.fn(() => { store = {}; return Promise.resolve(); }),
+        getAllKeys: jest.fn(() => Promise.resolve(Object.keys(store))),
+        multiSet: jest.fn((pairs) => { pairs.forEach(([k, v]) => { store[k] = v; }); return Promise.resolve(); }),
+        multiGet: jest.fn((keys) => Promise.resolve(keys.map(k => [k, store[k] ?? null]))),
+    };
+});
+
+// Verify calls
+test('token is stored on login', async () => {
+    await loginUser('devesh@test.com', 'pass123');
+
+    expect(AsyncStorage.setItem).toHaveBeenCalledWith(
+        'authToken',
+        expect.any(String)
+    );
+});
+```
+
+---
+
+### Q383. How do you test React Navigation screens?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Navigation Testing
+
+**Answer:**
+```js
+// Create a navigation test utility
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+
+const Stack = createNativeStackNavigator();
+
+// Test wrapper with navigation
+const renderScreen = (Screen, params = {}, additionalScreens = []) => {
+    const TestApp = () => (
+        <NavigationContainer>
+            <Stack.Navigator>
+                <Stack.Screen
+                    name="Screen"
+                    component={Screen}
+                    initialParams={params}
+                />
+                {additionalScreens.map(({ name, component }) => (
+                    <Stack.Screen key={name} name={name} component={component} />
+                ))}
+            </Stack.Navigator>
+        </NavigationContainer>
+    );
+    return render(<TestApp />);
+};
+
+// Test a screen
+test('ProfileScreen displays user data', async () => {
+    const mockUser = { id: '1', name: 'Devesh Kumar', email: 'dev@test.com' };
+    jest.mocked(fetchUser).mockResolvedValue(mockUser);
+
+    renderScreen(ProfileScreen, { userId: '1' });
+
+    await screen.findByText('Devesh Kumar');
+    expect(screen.getByText('dev@test.com')).toBeTruthy();
+});
+
+test('EmployeeDetail back button goes to list', async () => {
+    const mockEmployee = { id: '1', name: 'Devesh' };
+    jest.mocked(fetchEmployee).mockResolvedValue(mockEmployee);
+
+    renderScreen(
+        EmployeeDetailScreen,
+        { employeeId: '1' },
+        [{ name: 'EmployeeList', component: EmployeeListScreen }]
+    );
+
+    await screen.findByText('Devesh');
+    fireEvent.press(screen.getByLabelText('Go back'));
+
+    // Should be on list now
+    await screen.findByTestId('employee-list');
+});
+
+// Test header buttons
+test('save button in header triggers save', async () => {
+    const onSave = jest.fn();
+    renderScreen(EditEmployeeScreen, { employeeId: '1', onSave });
+
+    await screen.findByTestId('employee-form');
+    fireEvent.press(screen.getByText('Save'));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+});
+```
+
+---
+
+### Q384. How do you test custom React hooks with side effects?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Hook Testing
+
+**Answer:**
+```js
+// Complex hook with side effects
+const useAttendance = (employeeId: string) => {
+    const [attendance, setAttendance] = useState<Attendance[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const checkIn = useCallback(async () => {
+        try {
+            const record = await api.checkIn(employeeId);
+            setAttendance(prev => [...prev, record]);
+            return record;
+        } catch (e) {
+            setError(e.message);
+            throw e;
+        }
+    }, [employeeId]);
+
+    const checkOut = useCallback(async (recordId: string) => {
+        const updated = await api.checkOut(recordId);
+        setAttendance(prev => prev.map(r => r.id === recordId ? updated : r));
+    }, []);
+
+    useEffect(() => {
+        setLoading(true);
+        api.getAttendance(employeeId)
+            .then(setAttendance)
+            .catch(e => setError(e.message))
+            .finally(() => setLoading(false));
+    }, [employeeId]);
+
+    return { attendance, loading, error, checkIn, checkOut };
+};
+
+// Test file
+import { renderHook, act, waitFor } from '@testing-library/react-native';
+import { useAttendance } from '../hooks/useAttendance';
+import * as api from '../api';
+jest.mock('../api');
+
+describe('useAttendance', () => {
+    const mockRecord = { id: 'r1', employeeId: 'e1', checkIn: '09:00', checkOut: null };
+
+    beforeEach(() => {
+        jest.mocked(api.getAttendance).mockResolvedValue([mockRecord]);
+        jest.mocked(api.checkIn).mockResolvedValue({ ...mockRecord, id: 'r2' });
+        jest.mocked(api.checkOut).mockResolvedValue({ ...mockRecord, checkOut: '18:00' });
+    });
+
+    it('loads attendance on mount', async () => {
+        const { result } = renderHook(() => useAttendance('e1'));
+
+        expect(result.current.loading).toBe(true);
+
+        await waitFor(() => {
+            expect(result.current.loading).toBe(false);
+        });
+
+        expect(result.current.attendance).toHaveLength(1);
+        expect(result.current.attendance[0].id).toBe('r1');
+    });
+
+    it('adds record on checkIn', async () => {
+        const { result } = renderHook(() => useAttendance('e1'));
+        await waitFor(() => expect(result.current.loading).toBe(false));
+
+        await act(async () => {
+            await result.current.checkIn();
+        });
+
+        expect(result.current.attendance).toHaveLength(2);
+    });
+
+    it('updates record on checkOut', async () => {
+        const { result } = renderHook(() => useAttendance('e1'));
+        await waitFor(() => expect(result.current.loading).toBe(false));
+
+        await act(async () => {
+            await result.current.checkOut('r1');
+        });
+
+        expect(result.current.attendance[0].checkOut).toBe('18:00');
+    });
+
+    it('sets error on API failure', async () => {
+        jest.mocked(api.getAttendance).mockRejectedValue(new Error('Unauthorized'));
+        const { result } = renderHook(() => useAttendance('e1'));
+
+        await waitFor(() => {
+            expect(result.current.error).toBe('Unauthorized');
+        });
+    });
+});
+```
+
+---
+
+### Q385. What is Detox and how does it work?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** E2E Testing
+
+**Answer:**
+Detox is a grey-box E2E testing framework for React Native. It runs your actual app on a real device/simulator and simulates user interactions.
+
+**Grey-box testing:** Detox has access to the React Native runtime internals — it knows when the JS thread is idle, so it can synchronise test actions without arbitrary sleeps.
+
+```bash
+# Install
+npm install --save-dev detox jest-circus
+
+# Configure Detox
+npx detox init --runner jest
+
+# Build test app (once, or when native changes)
+npx detox build --configuration ios.sim.debug
+npx detox build --configuration android.emu.debug
+
+# Run tests
+npx detox test --configuration ios.sim.debug
+npx detox test --configuration ios.sim.debug --testNamePattern "Login"
+```
+
+```js
+// .detoxrc.js
+module.exports = {
+    testRunner: {
+        $0: 'jest',
+        args: { config: 'e2e/jest.config.js' },
+    },
+    apps: {
+        'ios.debug': {
+            type: 'ios.app',
+            binaryPath: 'ios/build/Build/Products/Debug-iphonesimulator/MyApp.app',
+            build: 'xcodebuild -workspace ios/MyApp.xcworkspace -scheme MyApp -configuration Debug -sdk iphonesimulator -derivedDataPath ios/build',
+        },
+        'android.debug': {
+            type: 'android.apk',
+            binaryPath: 'android/app/build/outputs/apk/debug/app-debug.apk',
+            build: 'cd android && ./gradlew assembleDebug assembleAndroidTest -DtestBuildType=debug',
+        },
+    },
+    devices: {
+        simulator: {
+            type: 'ios.simulator',
+            device: { type: 'iPhone 15' },
+        },
+        emulator: {
+            type: 'android.emulator',
+            device: { avdName: 'Pixel_6_API_33' },
+        },
+    },
+    configurations: {
+        'ios.sim.debug': { device: 'simulator', app: 'ios.debug' },
+        'android.emu.debug': { device: 'emulator', app: 'android.debug' },
+    },
+};
+```
+
+---
+
+### Q386. How do you write a Detox E2E test?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Detox
+
+**Answer:**
+```js
+// e2e/login.e2e.js
+describe('Login Flow', () => {
+    beforeAll(async () => {
+        await device.launchApp({ newInstance: true });
+    });
+
+    beforeEach(async () => {
+        await device.reloadReactNative(); // fresh state each test
+    });
+
+    it('should show login screen on launch', async () => {
+        await expect(element(by.id('login-screen'))).toBeVisible();
+        await expect(element(by.id('email-input'))).toBeVisible();
+        await expect(element(by.id('password-input'))).toBeVisible();
+    });
+
+    it('should show error for invalid credentials', async () => {
+        await element(by.id('email-input')).typeText('wrong@test.com');
+        await element(by.id('password-input')).typeText('wrongpass');
+        await element(by.id('login-button')).tap();
+
+        await expect(element(by.text('Invalid credentials'))).toBeVisible();
+    });
+
+    it('should navigate to dashboard after login', async () => {
+        await element(by.id('email-input')).typeText('devesh@erp.com');
+        await element(by.id('password-input')).typeText('ValidPass123');
+        await element(by.id('login-button')).tap();
+
+        // Detox waits for JS idle automatically — no arbitrary sleep needed
+        await expect(element(by.id('dashboard-screen'))).toBeVisible();
+        await expect(element(by.text('Good morning, Devesh'))).toBeVisible();
+    });
+
+    it('should persist login across app restart', async () => {
+        // Login
+        await element(by.id('email-input')).typeText('devesh@erp.com');
+        await element(by.id('password-input')).typeText('ValidPass123');
+        await element(by.id('login-button')).tap();
+        await expect(element(by.id('dashboard-screen'))).toBeVisible();
+
+        // Restart app (simulates kill + reopen)
+        await device.launchApp({ newInstance: true });
+
+        // Should skip login and go straight to dashboard
+        await expect(element(by.id('dashboard-screen'))).toBeVisible();
+    });
+});
+```
+
+---
+
+### Q387. What are Detox matchers and how do you use them?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Detox
+
+**Answer:**
+```js
+// Finders (by.* — locate elements)
+element(by.id('testID-value'))          // testID prop
+element(by.text('Exact text'))          // exact text content
+element(by.label('accessibility label'))// accessibilityLabel
+element(by.type('RCTTextInput'))        // native component type
+element(by.traits(['button']))          // accessibilityTraits (iOS)
+element(by.hint('What this does'))      // accessibilityHint
+
+// Combining matchers
+element(by.id('list').withAncestor(by.id('modal')))
+element(by.id('item-1').withDescendant(by.text('Active')))
+element(by.id('section').not().withDescendant(by.text('Empty')))
+
+// Index (when multiple matching elements)
+element(by.text('Delete')).atIndex(2)  // third "Delete" button
+
+// Actions
+await element(by.id('input')).typeText('Hello World');
+await element(by.id('input')).clearText();
+await element(by.id('input')).replaceText('New text');
+await element(by.id('button')).tap();
+await element(by.id('button')).longPress();
+await element(by.id('button')).longPress(2000); // 2 seconds
+await element(by.id('list')).scroll(200, 'down');
+await element(by.id('list')).scrollTo('bottom');
+await element(by.id('switch')).tap(); // toggle switch
+await element(by.id('slider')).adjustSliderToPosition(0.5); // 50%
+
+// Swipe
+await element(by.id('card')).swipe('left', 'fast', 0.75);
+await element(by.id('screen')).swipe('down', 'slow', 0.5);
+
+// Assertions (expect.*)
+await expect(element(by.id('header'))).toBeVisible();
+await expect(element(by.id('header'))).toBeNotVisible();
+await expect(element(by.id('modal'))).toExist();
+await expect(element(by.id('modal'))).toNotExist();
+await expect(element(by.text('Hello'))).toHaveText('Hello');
+await expect(element(by.id('badge'))).toHaveLabel('3 notifications');
+await expect(element(by.id('checkbox'))).toHaveToggleValue(true);
+await expect(element(by.id('image'))).toHaveId('profile-photo');
+```
+
+---
+
+### Q388. How do you handle Detox test setup and teardown?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Detox
+
+**Answer:**
+```js
+// e2e/setup/globalSetup.js
+module.exports = async () => {
+    const { DetoxCircusEnvironment } = require('detox/runners/jest');
+    // Global setup runs ONCE before all test suites
+};
+
+// e2e/setup/globalTeardown.js
+module.exports = async () => {
+    // Global teardown runs ONCE after all test suites
+};
+
+// e2e/jest.config.js
+module.exports = {
+    maxWorkers: 1,  // Detox tests run serially (one device)
+    testEnvironment: './setup/detoxEnvironment.js',
+    globalSetup: './setup/globalSetup.js',
+    globalTeardown: './setup/globalTeardown.js',
+    testTimeout: 120000,
+    verbose: true,
+};
+
+// Inside test file — lifecycle hooks
+describe('Employee Management', () => {
+    beforeAll(async () => {
+        // Runs once before all tests in this describe
+        await device.launchApp({
+            newInstance: true,
+            userNotification: null,
+            permissions: {
+                notifications: 'YES',
+                location: 'inuse',
+                camera: 'YES',
+            },
+        });
+
+        // Login once for all tests in this suite
+        await loginAsAdmin();
+    });
+
+    afterAll(async () => {
+        // Cleanup after all tests
+        await logoutUser();
+    });
+
+    beforeEach(async () => {
+        // Reset to known state before each test
+        await device.reloadReactNative();
+        await navigateTo('EmployeeList');
+    });
+
+    afterEach(async () => {
+        // Take screenshot on failure (auto in Detox, but manual here)
+        if (jasmine.currentTest.failedExpectations.length > 0) {
+            await device.takeScreenshot('failure-' + jasmine.currentTest.fullName);
+        }
+    });
+
+    it('can add a new employee', async () => {
+        await element(by.id('add-employee-btn')).tap();
+        // ...
+    });
+});
+```
+
+---
+
+### Q389. How do you mock the network in Detox tests?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Detox Network Mocking
+
+**Answer:**
+```js
+// Option 1: Use a test server (most reliable)
+// Run a real mock server during E2E tests
+
+// jest.globalSetup.js
+const { createServer } = require('./testServer');
+module.exports = async () => {
+    global.testServer = createServer();
+    await global.testServer.listen(3001);
+    process.env.API_URL = 'http://localhost:3001';
+};
+
+// jest.globalTeardown.js
+module.exports = async () => {
+    await global.testServer.close();
+};
+
+// testServer.js — using express + JSON fixtures
+const express = require('express');
+const app = express();
+
+app.get('/api/employees', (req, res) => {
+    res.json([
+        { id: '1', name: 'Devesh Kumar', department: 'Engineering' },
+        { id: '2', name: 'Priya Singh', department: 'HR' },
+    ]);
+});
+
+app.post('/api/auth/login', (req, res) => {
+    const { email, password } = req.body;
+    if (email === 'admin@test.com' && password === 'TestPass123') {
+        res.json({ token: 'test-jwt-token', user: { name: 'Admin' } });
+    } else {
+        res.status(401).json({ error: 'Invalid credentials' });
+    }
+});
+
+// Option 2: Detox Network Mocking (Detox 20+)
+it('shows error when server is down', async () => {
+    await device.launchApp({
+        newInstance: true,
+        launchArgs: { mockNetwork: 'error' }, // custom launch arg
+    });
+
+    // App reads launch args and uses mock network layer
+    await expect(element(by.text('No internet connection'))).toBeVisible();
+});
+
+// Option 3: Intercept in app code using launch params
+// index.js / App.tsx
+if (DevSettings.isSimulator && NativeModules.LaunchArgs?.useMockApi) {
+    // Use mock API instead of real API
+}
+```
+
+---
+
+### Q390. How do you test push notification handling in Detox?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Detox Advanced
+
+**Answer:**
+```js
+// Detox supports simulating push notifications
+
+describe('Push Notification Handling', () => {
+    beforeAll(async () => {
+        await device.launchApp({ newInstance: true });
+    });
+
+    it('opens attendance screen from notification tap', async () => {
+        // Login first
+        await loginAsEmployee();
+
+        // Simulate receiving and tapping a push notification
+        await device.sendUserNotification({
+            // iOS format
+            trigger: { type: 'push' },
+            title: 'Attendance Reminder',
+            body: 'Please mark your attendance',
+            badge: 1,
+            payload: {
+                screen: 'Attendance',
+                action: 'checkIn',
+            },
+        });
+
+        // Should navigate to attendance screen
+        await expect(element(by.id('attendance-screen'))).toBeVisible();
+    });
+
+    it('shows badge on notification received while app is open', async () => {
+        await loginAsEmployee();
+
+        // App is in foreground — notification received
+        await device.sendUserNotification({
+            trigger: { type: 'push' },
+            title: 'New Leave Request',
+            body: 'Priya Singh requested 2 days leave',
+        });
+
+        // Should show in-app notification banner
+        await expect(element(by.id('notification-banner'))).toBeVisible();
+        await expect(element(by.text('New Leave Request'))).toBeVisible();
+    });
+
+    it('handles notification when app is in background', async () => {
+        await loginAsEmployee();
+
+        // Send app to background
+        await device.sendToHome();
+
+        // Simulate push + tap (launches app with notification data)
+        await device.launchApp({
+            newInstance: false,
+            userNotification: {
+                title: 'Payroll Processed',
+                body: 'Your salary has been credited',
+                payload: { screen: 'Payslip', month: '2024-01' },
+            },
+        });
+
+        await expect(element(by.id('payslip-screen'))).toBeVisible();
+    });
+});
+```
+
+---
+
+### Q391. What is Maestro and how does it compare to Detox?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** E2E Testing Tools
+
+**Answer:**
+Maestro is a newer E2E testing framework that uses YAML-based test flows. Simpler to set up than Detox, doesn't require building a test binary.
+
+```yaml
+# e2e/flows/login.yaml — Maestro test
+appId: com.yourcompany.erp
+---
+- launchApp
+- assertVisible: "Login"
+- tapOn:
+    id: "email-input"
+- inputText: "devesh@erp.com"
+- tapOn:
+    id: "password-input"
+- inputText: "ValidPass123"
+- tapOn:
+    id: "login-button"
+- assertVisible: "Good morning, Devesh"
+- assertVisible:
+    id: "dashboard-screen"
+```
+
+```bash
+# Run Maestro tests
+maestro test e2e/flows/login.yaml
+maestro test e2e/flows/  # run all flows in directory
+```
+
+**Detox vs Maestro:**
+
+| | Detox | Maestro |
+|--|-------|---------|
+| Test language | JavaScript | YAML |
+| Setup complexity | High (build config) | Low (no build needed) |
+| Reliability | Very high (grey-box) | High |
+| CI support | ✅ Full | ✅ Maestro Cloud |
+| Debugging | JS debugger | maestro studio |
+| Custom logic | Full JS | Limited |
+| Build required | Yes | No |
+| Learning curve | High | Low |
+
+**When to use Maestro:**
+- Quick QA smoke tests written by non-developers
+- Simple happy-path testing
+- Teams new to E2E testing
+
+**When to use Detox:**
+- Complex test logic (conditionals, loops)
+- Need grey-box synchronisation
+- Existing Detox CI infrastructure
+
+---
+
+### Q392. How do you test context and providers?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** RNTL Advanced
+
+**Answer:**
+```js
+// ThemeContext
+const ThemeContext = createContext<{ theme: 'light' | 'dark'; toggle: () => void } | null>(null);
+
+const ThemeProvider = ({ children }) => {
+    const [theme, setTheme] = useState<'light' | 'dark'>('light');
+    const toggle = useCallback(() => setTheme(t => t === 'light' ? 'dark' : 'light'), []);
+    return <ThemeContext.Provider value={{ theme, toggle }}>{children}</ThemeContext.Provider>;
+};
+
+// Component using context
+const ThemedHeader = () => {
+    const { theme, toggle } = useContext(ThemeContext)!;
+    return (
+        <View testID="header" style={{ backgroundColor: theme === 'light' ? '#fff' : '#111' }}>
+            <Text testID="theme-label">{theme}</Text>
+            <Pressable testID="toggle-button" onPress={toggle}><Text>Toggle</Text></Pressable>
+        </View>
+    );
+};
+
+// Tests
+describe('ThemedHeader', () => {
+    // Render with real provider
+    const renderWithTheme = (ui: React.ReactNode, initialTheme?: 'light' | 'dark') => {
+        const Wrapper = ({ children }) => <ThemeProvider>{children}</ThemeProvider>;
+        return render(ui, { wrapper: Wrapper });
+    };
+
+    it('shows light theme by default', () => {
+        renderWithTheme(<ThemedHeader />);
+        expect(screen.getByTestId('theme-label')).toHaveTextContent('light');
+    });
+
+    it('toggles to dark theme', async () => {
+        renderWithTheme(<ThemedHeader />);
+        fireEvent.press(screen.getByTestId('toggle-button'));
+        await waitFor(() => {
+            expect(screen.getByTestId('theme-label')).toHaveTextContent('dark');
+        });
+    });
+
+    // Test with mock context (when you want to control context value)
+    it('renders with injected theme value', () => {
+        const mockContext = { theme: 'dark' as const, toggle: jest.fn() };
+        render(
+            <ThemeContext.Provider value={mockContext}>
+                <ThemedHeader />
+            </ThemeContext.Provider>
+        );
+        expect(screen.getByTestId('theme-label')).toHaveTextContent('dark');
+    });
+});
+```
+
+---
+
+### Q393. How do you test animations in React Native?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Animation Testing
+
+**Answer:**
+```js
+// Animations are hard to test fully — focus on:
+// 1. Component renders correctly before/after animation
+// 2. Animated values reach target state
+// 3. Callbacks fire (onAnimationComplete, etc.)
+
+// Mock Animated API
+jest.mock('react-native', () => {
+    const RN = jest.requireActual('react-native');
+    // Disable native animations in tests
+    RN.Animated.timing = (value, config) => ({
+        start: (callback) => {
+            value.setValue(config.toValue); // immediately set final value
+            callback?.({ finished: true });
+        },
+    });
+    return RN;
+});
+
+// Mock Reanimated (jest.setup.js)
+jest.mock('react-native-reanimated', () => {
+    const Reanimated = require('react-native-reanimated/mock');
+    return Reanimated;
+});
+
+// Test component that animates in
+test('AnimatedModal shows content after animation', async () => {
+    const { rerender } = render(<AnimatedModal visible={false} />);
+    expect(screen.queryByText('Modal content')).toBeNull();
+
+    rerender(<AnimatedModal visible={true} />);
+
+    // With mocked animation, state update is synchronous
+    await waitFor(() => {
+        expect(screen.getByText('Modal content')).toBeTruthy();
+    });
+});
+
+// Test with fake timers
+test('loading spinner appears during animation delay', async () => {
+    jest.useFakeTimers();
+    render(<DelayedLoader delay={500} />);
+
+    expect(screen.queryByTestId('spinner')).toBeNull();
+
+    act(() => { jest.advanceTimersByTime(500); });
+
+    await waitFor(() => {
+        expect(screen.getByTestId('spinner')).toBeTruthy();
+    });
+
+    jest.useRealTimers();
+});
+```
+
+---
+
+### Q394. How do you write integration tests for a full screen component?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Integration Testing
+
+**Answer:**
+```js
+// Full screen integration test — renders the screen with all its dependencies
+import { render, screen, fireEvent, waitFor } from '@testing-library/react-native';
+import { NavigationContainer } from '@react-navigation/native';
+import { Provider } from 'react-redux';
+import { AttendanceScreen } from '../screens/AttendanceScreen';
+import * as api from '../api';
+
+jest.mock('../api');
+
+const renderAttendanceScreen = (overrides = {}) => {
+    const store = createTestStore({
+        auth: { user: { id: 'e1', name: 'Devesh Kumar' } },
+        ...overrides,
+    });
+
+    const navigation = { navigate: jest.fn(), setOptions: jest.fn() };
+
+    return render(
+        <Provider store={store}>
+            <NavigationContainer>
+                <AttendanceScreen navigation={navigation} route={{ params: {} }} />
+            </NavigationContainer>
+        </Provider>
+    );
+};
+
+describe('AttendanceScreen Integration', () => {
+    beforeEach(() => {
+        jest.mocked(api.getAttendanceRecords).mockResolvedValue([
+            { id: 'r1', date: '2024-01-15', checkIn: '09:00', checkOut: null, status: 'present' },
+        ]);
+        jest.mocked(api.checkIn).mockResolvedValue(
+            { id: 'r2', date: '2024-01-16', checkIn: '09:15', checkOut: null }
+        );
+    });
+
+    it('loads and displays attendance records', async () => {
+        renderAttendanceScreen();
+
+        // Shows skeleton while loading
+        expect(screen.getAllByTestId('skeleton-row')).toHaveLength(3);
+
+        // Wait for data
+        await waitFor(() => {
+            expect(screen.getByText('Jan 15, 2024')).toBeTruthy();
+            expect(screen.getByText('09:00')).toBeTruthy();
+        });
+
+        // Skeleton gone
+        expect(screen.queryByTestId('skeleton-row')).toBeNull();
+    });
+
+    it('completes full check-in flow', async () => {
+        renderAttendanceScreen();
+        await waitFor(() => expect(screen.queryByTestId('skeleton-row')).toBeNull());
+
+        // Tap check-in
+        fireEvent.press(screen.getByTestId('check-in-button'));
+
+        // Confirmation modal appears
+        await screen.findByText('Confirm check-in');
+        fireEvent.press(screen.getByText('Confirm'));
+
+        // API called
+        expect(api.checkIn).toHaveBeenCalledWith('e1');
+
+        // Success feedback shown
+        await screen.findByText('Checked in at 09:15');
+
+        // Button changes to check-out
+        expect(screen.getByTestId('check-out-button')).toBeTruthy();
+        expect(screen.queryByTestId('check-in-button')).toBeNull();
+    });
+
+    it('shows error when check-in fails', async () => {
+        jest.mocked(api.checkIn).mockRejectedValueOnce(new Error('Already checked in'));
+        renderAttendanceScreen();
+        await waitFor(() => expect(screen.queryByTestId('skeleton-row')).toBeNull());
+
+        fireEvent.press(screen.getByTestId('check-in-button'));
+        await screen.findByText('Confirm check-in');
+        fireEvent.press(screen.getByText('Confirm'));
+
+        await screen.findByText('Already checked in');
+    });
+});
+```
+
+---
+
+### Q395. How do you snapshot test in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Snapshot Testing
+
+**Answer:**
+```js
+// Basic snapshot test
+import { render } from '@testing-library/react-native';
+import { EmployeeCard } from '../EmployeeCard';
+
+const mockEmployee = {
+    id: '1', name: 'Devesh Kumar', role: 'RN Developer', isActive: true,
+};
+
+test('EmployeeCard matches snapshot', () => {
+    const { toJSON } = render(
+        <EmployeeCard employee={mockEmployee} onPress={jest.fn()} onDelete={jest.fn()} />
+    );
+    expect(toJSON()).toMatchSnapshot();
+});
+// Creates __snapshots__/EmployeeCard.test.tsx.snap
+
+// Update snapshot when intentional change made:
+// jest --updateSnapshot (or -u flag)
+
+// Inline snapshot (snapshot stored in test file)
+test('button renders correctly', () => {
+    const { toJSON } = render(<Button title="Submit" variant="primary" />);
+    expect(toJSON()).toMatchInlineSnapshot(`
+        <View
+          accessibilityRole="button"
+          style={{"backgroundColor": "#6200EE", "borderRadius": 8}}
+        >
+          <Text style={{"color": "white"}}>Submit</Text>
+        </View>
+    `);
+});
+
+// Snapshot testing best practices:
+// ✅ Use for UI regression testing (catch unintended style/structure changes)
+// ✅ Snapshot small, focused components
+// ✅ Review snapshot diffs carefully in PR — don't blindly update
+// ❌ Don't snapshot entire screens (too large, too many false positives)
+// ❌ Don't snapshot components with dynamic content (timestamps, random IDs)
+```
+
+---
+
+### Q396. How do you test error boundaries?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Error Handling Testing
+
+**Answer:**
+```js
+// ErrorBoundary component
+class ErrorBoundary extends Component {
+    state = { hasError: false, error: null };
+
+    static getDerivedStateFromError(error) {
+        return { hasError: true, error };
+    }
+
+    componentDidCatch(error, info) {
+        Sentry.captureException(error, { extra: info });
+    }
+
+    render() {
+        if (this.state.hasError) {
+            return (
+                <View testID="error-boundary">
+                    <Text>Something went wrong</Text>
+                    <Text testID="error-message">{this.state.error?.message}</Text>
+                    <Pressable testID="retry-button" onPress={() => this.setState({ hasError: false })}>
+                        <Text>Try Again</Text>
+                    </Pressable>
+                </View>
+            );
+        }
+        return this.props.children;
+    }
+}
+
+// Component that can throw
+const BrokenComponent = ({ shouldThrow }) => {
+    if (shouldThrow) throw new Error('Component crashed!');
+    return <Text>Working fine</Text>;
+};
+
+// Tests
+describe('ErrorBoundary', () => {
+    // Suppress error output in test console
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    afterAll(() => spy.mockRestore());
+
+    it('renders children normally when no error', () => {
+        render(
+            <ErrorBoundary>
+                <BrokenComponent shouldThrow={false} />
+            </ErrorBoundary>
+        );
+        expect(screen.getByText('Working fine')).toBeTruthy();
+        expect(screen.queryByTestId('error-boundary')).toBeNull();
+    });
+
+    it('shows error UI when child throws', () => {
+        render(
+            <ErrorBoundary>
+                <BrokenComponent shouldThrow={true} />
+            </ErrorBoundary>
+        );
+        expect(screen.getByTestId('error-boundary')).toBeTruthy();
+        expect(screen.getByTestId('error-message')).toHaveTextContent('Component crashed!');
+    });
+
+    it('recovers when retry is pressed', async () => {
+        const { rerender } = render(
+            <ErrorBoundary>
+                <BrokenComponent shouldThrow={true} />
+            </ErrorBoundary>
+        );
+        expect(screen.getByTestId('error-boundary')).toBeTruthy();
+
+        fireEvent.press(screen.getByTestId('retry-button'));
+
+        rerender(
+            <ErrorBoundary>
+                <BrokenComponent shouldThrow={false} />
+            </ErrorBoundary>
+        );
+
+        await waitFor(() => {
+            expect(screen.queryByTestId('error-boundary')).toBeNull();
+            expect(screen.getByText('Working fine')).toBeTruthy();
+        });
+    });
+});
+```
+
+---
+
+### Q397. How do you run tests in parallel and on CI?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** CI Testing
+
+**Answer:**
+```json
+// package.json — Jest scripts
+{
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:ci": "jest --ci --coverage --runInBand",
+    "test:unit": "jest --testPathPattern='__tests__/unit'",
+    "test:integration": "jest --testPathPattern='__tests__/integration'"
+  }
+}
+```
+
+```yaml
+# GitHub Actions — CI testing
+name: Test
+on: [push, pull_request]
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm' }
+      - run: npm ci
+      - name: Run unit + integration tests
+        run: npx jest --ci --coverage --maxWorkers=2
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage/lcov.info
+
+  e2e-tests:
+    runs-on: macos-latest  # Detox requires macOS for iOS
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm' }
+      - run: npm ci
+      - name: Install Detox CLI
+        run: npm install -g detox-cli
+      - name: Build E2E app
+        run: detox build --configuration ios.sim.release
+      - name: Run E2E tests
+        run: detox test --configuration ios.sim.release --headless --ci
+      - name: Upload E2E screenshots (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: detox-screenshots
+          path: artifacts/
+```
+
+```js
+// jest.config.js — parallel test configuration
+module.exports = {
+    preset: 'react-native',
+    maxWorkers: '50%',     // use half available CPUs
+    // OR:
+    // maxWorkers: 4,      // fixed number
+    // --runInBand         // single process (for CI with limited resources)
+
+    // Test timeout
+    testTimeout: 10000,    // 10 seconds per test
+
+    // Fail fast on CI
+    bail: process.env.CI ? 1 : 0,  // stop after 1st failure in CI
+};
+```
+
+---
+
+### Q398. How do you test native module integrations?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Mocking Native Modules
+
+**Answer:**
+```js
+// Mock the entire native module
+jest.mock('react-native', () => {
+    const RN = jest.requireActual('react-native');
+    return {
+        ...RN,
+        NativeModules: {
+            ...RN.NativeModules,
+            BiometricModule: {
+                canAuthenticate: jest.fn().mockResolvedValue('FACE_ID'),
+                authenticate: jest.fn().mockResolvedValue(true),
+            },
+            RazorpayModule: {
+                startPayment: jest.fn().mockResolvedValue({
+                    razorpay_payment_id: 'pay_test_123',
+                    razorpay_order_id: 'order_test_456',
+                }),
+            },
+        },
+    };
+});
+
+// Test component using biometrics
+import { NativeModules } from 'react-native';
+
+describe('BiometricLogin', () => {
+    it('shows Face ID button when available', async () => {
+        NativeModules.BiometricModule.canAuthenticate.mockResolvedValueOnce('FACE_ID');
+
+        render(<BiometricLogin onSuccess={jest.fn()} />);
+
+        await screen.findByText('Login with Face ID');
+    });
+
+    it('authenticates successfully', async () => {
+        NativeModules.BiometricModule.authenticate.mockResolvedValueOnce(true);
+        const onSuccess = jest.fn();
+
+        render(<BiometricLogin onSuccess={onSuccess} />);
+        await screen.findByText('Login with Face ID');
+        fireEvent.press(screen.getByText('Login with Face ID'));
+
+        await waitFor(() => {
+            expect(onSuccess).toHaveBeenCalled();
+        });
+    });
+
+    it('handles biometric failure gracefully', async () => {
+        NativeModules.BiometricModule.authenticate.mockRejectedValueOnce({
+            code: 'AUTH_ERROR',
+            message: 'Biometric sensor unavailable',
+        });
+
+        render(<BiometricLogin onSuccess={jest.fn()} />);
+        await screen.findByText('Login with Face ID');
+        fireEvent.press(screen.getByText('Login with Face ID'));
+
+        await screen.findByText('Authentication failed. Please try PIN.');
+    });
+});
+```
+
+---
+
+### Q399. What is code coverage and how do you interpret it?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Code Coverage
+
+**Answer:**
+```bash
+# Generate coverage report
+npx jest --coverage
+
+# Output:
+# --------------------------------|---------|----------|---------|---------|
+# File                            | % Stmts | % Branch | % Funcs | % Lines |
+# --------------------------------|---------|----------|---------|---------|
+# src/components/EmployeeCard.tsx |   92.31 |    83.33 |     100 |   91.67 |
+# src/hooks/useAttendance.ts      |   78.57 |    66.67 |   85.71 |   78.57 |
+# src/api/employeeApi.ts          |   100   |    100   |     100 |     100 |
+```
+
+```
+Coverage types:
+─────────────────────────────────────────────────────
+Statement coverage  — every executable line run
+Branch coverage     — every if/else/switch path taken
+Function coverage   — every function called
+Line coverage       — every line executed (similar to statement)
+```
+
+```js
+// package.json — enforce minimum coverage
+{
+  "jest": {
+    "coverageThreshold": {
+      "global": {
+        "branches": 60,
+        "functions": 70,
+        "lines": 70,
+        "statements": 70
+      },
+      // Per-file thresholds for critical paths
+      "./src/utils/payrollCalculator.ts": {
+        "branches": 90,
+        "functions": 100,
+        "lines": 90,
+        "statements": 90
+      }
+    }
+  }
+}
+
+// Exclude files from coverage
+// jest.config.js
+coveragePathIgnorePatterns: [
+    '/node_modules/',
+    '__mocks__',
+    '.stories.tsx',
+    'index.ts',       // re-export files — no logic to test
+],
+
+// Add istanbul comment to exclude specific lines
+const value = isDev
+    ? 'development'
+    /* istanbul ignore next */
+    : 'production';  // line excluded from coverage
+```
+
+---
+
+### Q400. How do you test React Native with TypeScript?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** TypeScript + Testing
+
+**Answer:**
+```bash
+# Additional packages for TypeScript testing
+npm install --save-dev @types/jest ts-jest
+```
+
+```json
+// tsconfig.json — include test types
+{
+  "compilerOptions": {
+    "types": ["jest", "@testing-library/jest-native"],
+    "jsx": "react-native"
+  },
+  "include": ["src", "__tests__", "e2e"]
+}
+```
+
+```typescript
+// Typed mocks
+import { fetchEmployee } from '../api/employeeApi';
+
+// jest.mocked() provides full TypeScript type inference
+const mockFetchEmployee = jest.mocked(fetchEmployee);
+mockFetchEmployee.mockResolvedValue({
+    id: '1',
+    name: 'Devesh Kumar',
+    // TypeScript will error if required fields are missing
+});
+
+// Typed render helpers
+import { RenderOptions } from '@testing-library/react-native';
+
+const renderWithProviders = (
+    ui: React.ReactElement,
+    options?: Omit<RenderOptions, 'wrapper'> & {
+        preloadedState?: Partial<RootState>;
+    }
+) => {
+    const { preloadedState = {}, ...renderOptions } = options ?? {};
+    const store = createTestStore(preloadedState);
+    const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+        <Provider store={store}>{children}</Provider>
+    );
+    return { store, ...render(ui, { wrapper: Wrapper, ...renderOptions }) };
+};
+
+// Type-safe screen queries
+const emailInput = screen.getByTestId<React.ElementRef<typeof TextInput>>('email-input');
+
+// Typed hook test results
+const { result } = renderHook<ReturnType<typeof useCounter>, Parameters<typeof useCounter>>(() => useCounter(0));
+expect(result.current.count).toBe(0);
+```
+
+---
+
+### Q401. How do you test FlatList rendering?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** List Testing
+
+**Answer:**
+```js
+// FlatList virtualises rendering — only renders visible items
+// RNTL renders all items by default (no virtualisation in tests)
+
+test('FlatList renders all employees', async () => {
+    const employees = Array.from({ length: 5 }, (_, i) => ({
+        id: String(i + 1),
+        name: `Employee ${i + 1}`,
+    }));
+
+    render(<EmployeeFlatList employees={employees} />);
+
+    // All items rendered in test environment (no virtualisation)
+    await waitFor(() => {
+        employees.forEach(emp => {
+            expect(screen.getByText(emp.name)).toBeTruthy();
+        });
+    });
+});
+
+// Test ListEmptyComponent
+test('shows empty state when no data', () => {
+    render(<EmployeeFlatList employees={[]} />);
+    expect(screen.getByText('No employees found')).toBeTruthy();
+    expect(screen.queryByTestId('employee-item')).toBeNull();
+});
+
+// Test onEndReached (infinite scroll trigger)
+test('calls loadMore when end is reached', async () => {
+    const loadMore = jest.fn();
+    const employees = Array.from({ length: 10 }, (_, i) => ({
+        id: String(i + 1), name: `Employee ${i + 1}`,
+    }));
+
+    render(
+        <FlatList
+            testID="employee-list"
+            data={employees}
+            renderItem={({ item }) => <Text>{item.name}</Text>}
+            keyExtractor={item => item.id}
+            onEndReached={loadMore}
+            onEndReachedThreshold={0.5}
+        />
+    );
+
+    // Simulate scroll to end
+    fireEvent.scroll(screen.getByTestId('employee-list'), {
+        nativeEvent: {
+            contentOffset: { y: 500 },
+            contentSize: { height: 600, width: 300 },
+            layoutMeasurement: { height: 200, width: 300 },
+        },
+    });
+
+    await waitFor(() => expect(loadMore).toHaveBeenCalled());
+});
+
+// Test pull-to-refresh
+test('triggers refresh on pull down', async () => {
+    const onRefresh = jest.fn();
+    render(
+        <FlatList
+            testID="list"
+            data={[{ id: '1', name: 'Item' }]}
+            renderItem={({ item }) => <Text>{item.name}</Text>}
+            keyExtractor={item => item.id}
+            onRefresh={onRefresh}
+            refreshing={false}
+        />
+    );
+
+    fireEvent(screen.getByTestId('list'), 'refresh');
+    expect(onRefresh).toHaveBeenCalled();
+});
+```
+
+---
+
+### Q402. How do you test with fake timers in Jest?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Jest Timers
+
+**Answer:**
+```js
+// Fake timers control setTimeout, setInterval, Date, etc.
+
+describe('Debounced search', () => {
+    beforeEach(() => { jest.useFakeTimers(); });
+    afterEach(() => { jest.useRealTimers(); });
+
+    it('debounces API call', async () => {
+        const mockSearch = jest.fn().mockResolvedValue([]);
+        render(<SearchInput onSearch={mockSearch} debounceMs={300} />);
+
+        // Type rapidly
+        fireEvent.changeText(screen.getByTestId('search-input'), 'D');
+        fireEvent.changeText(screen.getByTestId('search-input'), 'De');
+        fireEvent.changeText(screen.getByTestId('search-input'), 'Dev');
+
+        // API not called yet
+        expect(mockSearch).not.toHaveBeenCalled();
+
+        // Advance past debounce window
+        act(() => { jest.advanceTimersByTime(300); });
+
+        await waitFor(() => {
+            expect(mockSearch).toHaveBeenCalledWith('Dev');
+            expect(mockSearch).toHaveBeenCalledTimes(1); // only once
+        });
+    });
+});
+
+// Test setTimeout-based loading state
+test('shows skeleton for 500ms minimum', async () => {
+    jest.useFakeTimers();
+    jest.mocked(fetchData).mockResolvedValue([]);
+
+    render(<DataScreen />);
+    expect(screen.getAllByTestId('skeleton')).toHaveLength(3);
+
+    // Data resolves but skeleton should still show
+    act(() => { jest.advanceTimersByTime(200); });
+    expect(screen.getAllByTestId('skeleton')).toHaveLength(3); // still showing
+
+    // After minimum time passes
+    act(() => { jest.advanceTimersByTime(300); }); // total 500ms
+    await waitFor(() => {
+        expect(screen.queryByTestId('skeleton')).toBeNull();
+    });
+
+    jest.useRealTimers();
+});
+
+// Test interval
+test('updates counter every second', () => {
+    jest.useFakeTimers();
+    render(<CountdownTimer seconds={5} />);
+
+    expect(screen.getByText('5')).toBeTruthy();
+
+    act(() => { jest.advanceTimersByTime(1000); });
+    expect(screen.getByText('4')).toBeTruthy();
+
+    act(() => { jest.advanceTimersByTime(4000); });
+    expect(screen.getByText('0')).toBeTruthy();
+
+    jest.useRealTimers();
+});
+```
+
+---
+
+### Q403. How do you test accessibility in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Accessibility Testing
+
+**Answer:**
+```js
+// Test accessibility props
+test('EmployeeCard has correct accessibility', () => {
+    const employee = { id: '1', name: 'Devesh Kumar', role: 'Developer', isActive: true };
+    render(<EmployeeCard employee={employee} onPress={jest.fn()} />);
+
+    const card = screen.getByRole('button');
+    expect(card).toHaveAccessibleName('Devesh Kumar, Developer, Active');
+
+    // accessibilityHint
+    expect(card).toHaveAccessibilityHint('Double tap to view details');
+});
+
+// Test screen reader announcements
+test('shows accessible state for disabled button', () => {
+    render(<Button title="Submit" disabled={true} />);
+    const button = screen.getByRole('button', { name: 'Submit' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibilityState({ disabled: true });
+});
+
+// Test that all interactive elements have labels
+test('all buttons have accessible labels', () => {
+    render(<ActionBar />);
+    const buttons = screen.getAllByRole('button');
+    buttons.forEach(button => {
+        // Every button should have either a label or a name
+        const hasLabel = button.props.accessibilityLabel ||
+                         button.props.accessibilityHint ||
+                         button.props['aria-label'];
+        expect(hasLabel).toBeTruthy();
+    });
+});
+
+// Test keyboard focus order (for external keyboard users)
+test('form fields are in logical tab order', () => {
+    render(<LoginForm onSubmit={jest.fn()} />);
+
+    const fields = screen.getAllByRole('textbox');
+    // Email should come before password
+    expect(fields[0]).toHaveAccessibilityHint('Enter your email address');
+    expect(fields[1]).toHaveAccessibilityHint('Enter your password');
+});
+
+// axe-core for automated accessibility checks (web-focused but some RN support)
+// jest-axe for RN
+import { toHaveNoViolations } from 'jest-axe';
+expect.extend(toHaveNoViolations);
+
+test('AttendanceCard has no accessibility violations', async () => {
+    const { container } = render(<AttendanceCard />);
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+});
+```
+
+---
+
+### Q404. How do you test deep links?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Deep Link Testing
+
+**Answer:**
+```js
+// Unit test: URL parsing
+import { getStateFromPath } from '@react-navigation/native';
+
+const linkingConfig = {
+    screens: {
+        Employee: 'employee/:id',
+        Payslip: 'payslip/:month',
+    },
+};
+
+test('parses employee deep link correctly', () => {
+    const state = getStateFromPath('/employee/42', linkingConfig);
+    expect(state).toMatchObject({
+        routes: [{
+            name: 'Employee',
+            params: { id: '42' },
+        }],
+    });
+});
+
+test('parses payslip deep link', () => {
+    const state = getStateFromPath('/payslip/2024-01', linkingConfig);
+    expect(state?.routes[0].name).toBe('Payslip');
+    expect(state?.routes[0].params).toMatchObject({ month: '2024-01' });
+});
+
+// Integration test: Linking.getInitialURL
+import { Linking } from 'react-native';
+
+jest.mock('react-native', () => ({
+    ...jest.requireActual('react-native'),
+    Linking: {
+        getInitialURL: jest.fn().mockResolvedValue('yourapp://employee/42'),
+        addEventListener: jest.fn(),
+    },
+}));
+
+test('app opens employee detail from deep link', async () => {
+    render(<AppWithNavigation />);
+    // NavigationContainer reads Linking.getInitialURL on mount
+    await screen.findByTestId('employee-detail-screen');
+    // Route should have id: 42
+});
+
+// Detox E2E deep link test
+it('handles deep link while app is closed', async () => {
+    await device.openURL({ url: 'yourapp://employee/42' });
+    await expect(element(by.id('employee-detail-screen'))).toBeVisible();
+    await expect(element(by.text('Devesh Kumar'))).toBeVisible();
+});
+```
+
+---
+
+### Q405. What is `userEvent` in RNTL and how does it differ from `fireEvent`?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** RNTL Advanced
+
+**Answer:**
+`userEvent` simulates user interactions more realistically than `fireEvent` — it fires multiple events in sequence (like a real user interaction), including pointerDown, pointerUp, press, focus, blur, etc.
+
+```js
+import userEvent from '@testing-library/user-event';
+// OR from RNTL directly (v12+):
+import { userEvent } from '@testing-library/react-native';
+
+// userEvent.setup() — creates a user event instance
+const user = userEvent.setup();
+
+// More realistic interactions
+test('typing text fires intermediate events', async () => {
+    render(<TextInput testID="input" />);
+
+    // fireEvent.changeText — fires onChangeText directly (no intermediate events)
+    fireEvent.changeText(screen.getByTestId('input'), 'Hello');
+
+    // userEvent.type — fires keyDown, keyUp, input, change for each character
+    await user.type(screen.getByTestId('input'), 'Hello');
+    // Also fires: focus on first character, blur check, etc.
+});
+
+// Example where difference matters:
+test('keyboard submit fires correctly', async () => {
+    const onSubmit = jest.fn();
+    render(<TextInput testID="input" onSubmitEditing={onSubmit} returnKeyType="done" />);
+
+    // userEvent simulates pressing the "Done" key on keyboard
+    await user.type(screen.getByTestId('input'), 'search term{Enter}');
+
+    expect(onSubmit).toHaveBeenCalled();
+    // fireEvent.changeText would NOT trigger onSubmitEditing
+});
+
+// Press interactions
+test('long press triggers menu', async () => {
+    const onLongPress = jest.fn();
+    render(<Pressable testID="btn" onLongPress={onLongPress}><Text>Hold</Text></Pressable>);
+
+    await user.longPress(screen.getByTestId('btn'));
+    expect(onLongPress).toHaveBeenCalled();
+});
+```
+
+---
+
+### Q406. How do you test a component that uses `useRef`?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Ref Testing
+
+**Answer:**
+```js
+// Testing refs imperatively
+const PasswordInput = React.forwardRef(({ label }, ref) => {
+    const [show, setShow] = useState(false);
+    const inputRef = useRef<TextInput>(null);
+
+    useImperativeHandle(ref, () => ({
+        focus: () => inputRef.current?.focus(),
+        clear: () => inputRef.current?.clear(),
+        getValue: () => inputRef.current?.props.value,
+    }));
+
+    return (
+        <View>
+            <Text>{label}</Text>
+            <TextInput
+                ref={inputRef}
+                testID="password-input"
+                secureTextEntry={!show}
+            />
+            <Pressable testID="toggle-visibility" onPress={() => setShow(!show)}>
+                <Text>{show ? 'Hide' : 'Show'}</Text>
+            </Pressable>
+        </View>
+    );
+});
+
+// Test component with ref
+test('ref exposes focus and clear methods', () => {
+    const ref = React.createRef<{ focus: () => void; clear: () => void }>();
+    render(<PasswordInput label="Password" ref={ref} />);
+
+    // Verify ref methods exist
+    expect(ref.current?.focus).toBeInstanceOf(Function);
+    expect(ref.current?.clear).toBeInstanceOf(Function);
+});
+
+test('toggle shows and hides password', async () => {
+    render(<PasswordInput label="Password" ref={null} />);
+
+    const input = screen.getByTestId('password-input');
+    expect(input.props.secureTextEntry).toBe(true);
+
+    fireEvent.press(screen.getByTestId('toggle-visibility'));
+    await waitFor(() => {
+        expect(screen.getByTestId('password-input').props.secureTextEntry).toBe(false);
+    });
+
+    expect(screen.getByText('Hide')).toBeTruthy();
+});
+```
+
+---
+
+### Q407. How do you test network requests with `msw` (Mock Service Worker)?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Network Mocking
+
+**Answer:**
+```bash
+npm install --save-dev msw
+```
+
+```js
+// src/mocks/handlers.ts — API mock definitions
+import { rest } from 'msw';
+
+export const handlers = [
+    rest.get('/api/employees', (req, res, ctx) => {
+        return res(ctx.json([
+            { id: '1', name: 'Devesh Kumar', department: 'Engineering' },
+            { id: '2', name: 'Priya Singh', department: 'HR' },
+        ]));
+    }),
+
+    rest.post('/api/auth/login', async (req, res, ctx) => {
+        const { email, password } = await req.json();
+        if (email === 'admin@test.com' && password === 'TestPass123') {
+            return res(ctx.json({ token: 'test-jwt', user: { name: 'Admin' } }));
+        }
+        return res(ctx.status(401), ctx.json({ error: 'Invalid credentials' }));
+    }),
+
+    rest.get('/api/employees/:id', (req, res, ctx) => {
+        const { id } = req.params;
+        return res(ctx.json({ id, name: `Employee ${id}`, role: 'Developer' }));
+    }),
+];
+```
+
+```js
+// src/mocks/server.ts — test server setup
+import { setupServer } from 'msw/node';
+import { handlers } from './handlers';
+
+export const server = setupServer(...handlers);
+```
+
+```js
+// jest.setup.js
+import { server } from './src/mocks/server';
+
+beforeAll(() => server.listen({ onUnhandledRequest: 'warn' }));
+afterEach(() => server.resetHandlers()); // reset per-test overrides
+afterAll(() => server.close());
+```
+
+```js
+// In tests — use handlers automatically
+test('loads employees from API', async () => {
+    render(<EmployeeList />);
+    await screen.findByText('Devesh Kumar');
+    await screen.findByText('Priya Singh');
+});
+
+// Override for specific test
+test('shows error on API failure', async () => {
+    server.use(
+        rest.get('/api/employees', (req, res, ctx) =>
+            res(ctx.status(500), ctx.json({ error: 'Internal server error' }))
+        )
+    );
+
+    render(<EmployeeList />);
+    await screen.findByText('Failed to load employees');
+});
+```
+
+---
+
+### Q408. How do you test Reanimated animations?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Reanimated Testing
+
+**Answer:**
+```js
+// jest.setup.js — mock Reanimated
+jest.mock('react-native-reanimated', () => {
+    const Reanimated = require('react-native-reanimated/mock');
+    // Reanimated mock makes all animations instant
+    return Reanimated;
+});
+
+// What the Reanimated mock does:
+// - useSharedValue returns a plain object { value: initialValue }
+// - withTiming, withSpring, etc. immediately set the value
+// - useAnimatedStyle returns a plain style object
+// - Animated.View renders as View
+
+// Test component with Reanimated
+const FadeInView = ({ children, visible }) => {
+    const opacity = useSharedValue(0);
+
+    useEffect(() => {
+        opacity.value = withTiming(visible ? 1 : 0, { duration: 300 });
+    }, [visible]);
+
+    const style = useAnimatedStyle(() => ({ opacity: opacity.value }));
+
+    return <Animated.View style={style}>{children}</Animated.View>;
+};
+
+test('FadeInView is opaque when visible', async () => {
+    const { rerender } = render(<FadeInView visible={false}><Text>Content</Text></FadeInView>);
+
+    // With mock, animation is instant — check final state
+    rerender(<FadeInView visible={true}><Text>Content</Text></FadeInView>);
+
+    await waitFor(() => {
+        const view = screen.getByText('Content').parent;
+        expect(view.props.style.opacity).toBe(1);
+    });
+});
+
+// Testing layout animations (entering/exiting)
+jest.mock('react-native-reanimated', () => {
+    const Reanimated = require('react-native-reanimated/mock');
+    // Make entering/exiting animations transparent in tests
+    Reanimated.FadeIn = { duration: jest.fn().mockReturnThis(), springify: jest.fn().mockReturnThis() };
+    return Reanimated;
+});
+
+test('item enters with animation', async () => {
+    render(
+        <Animated.View entering={FadeIn}>
+            <Text>New item</Text>
+        </Animated.View>
+    );
+    // Just test it renders — animation is mocked out
+    expect(screen.getByText('New item')).toBeTruthy();
+});
+```
+
+---
+
+### Q409. How do you write a test for a Redux Saga?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Redux Saga Testing
+
+**Answer:**
+```js
+// saga under test
+function* fetchEmployeesSaga(action) {
+    try {
+        yield put(setLoading(true));
+        const employees = yield call(api.fetchEmployees, action.payload.deptId);
+        yield put(setEmployees(employees));
+        yield put(setLoading(false));
+    } catch (error) {
+        yield put(setError(error.message));
+        yield put(setLoading(false));
+    }
+}
+
+// Method 1: Effect-by-effect testing (unit test)
+import { call, put } from 'redux-saga/effects';
+
+test('fetchEmployeesSaga happy path', () => {
+    const action = { payload: { deptId: 'eng' } };
+    const gen = fetchEmployeesSaga(action);
+
+    // Step through each yield
+    expect(gen.next().value).toEqual(put(setLoading(true)));
+    expect(gen.next().value).toEqual(call(api.fetchEmployees, 'eng'));
+
+    const mockEmployees = [{ id: '1', name: 'Devesh' }];
+    expect(gen.next(mockEmployees).value).toEqual(put(setEmployees(mockEmployees)));
+    expect(gen.next().value).toEqual(put(setLoading(false)));
+    expect(gen.next().done).toBe(true);
+});
+
+test('fetchEmployeesSaga error path', () => {
+    const action = { payload: { deptId: 'eng' } };
+    const gen = fetchEmployeesSaga(action);
+
+    gen.next(); // setLoading(true)
+    gen.next(); // call fetchEmployees
+
+    // Simulate error thrown by call effect
+    expect(gen.throw(new Error('Network error')).value).toEqual(
+        put(setError('Network error'))
+    );
+    expect(gen.next().value).toEqual(put(setLoading(false)));
+});
+
+// Method 2: Integration with runSaga (end-to-end)
+import { runSaga } from 'redux-saga';
+
+test('fetchEmployeesSaga dispatches correct actions', async () => {
+    const dispatched = [];
+    jest.mocked(api.fetchEmployees).mockResolvedValue([{ id: '1', name: 'Devesh' }]);
+
+    await runSaga(
+        { dispatch: (action) => dispatched.push(action) },
+        fetchEmployeesSaga,
+        { payload: { deptId: 'eng' } }
+    ).toPromise();
+
+    expect(dispatched).toEqual([
+        setLoading(true),
+        setEmployees([{ id: '1', name: 'Devesh' }]),
+        setLoading(false),
+    ]);
+});
+```
+
+---
+
+### Q410. How do you test a component that uses `useCallback` and `useMemo`?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Performance Hooks Testing
+
+**Answer:**
+```js
+// You don't test useCallback/useMemo directly —
+// you test the BEHAVIOUR they optimise
+
+// Component under test
+const SearchableList = ({ items }) => {
+    const [query, setQuery] = useState('');
+
+    // useMemo — filtered results
+    const filtered = useMemo(
+        () => items.filter(i => i.name.toLowerCase().includes(query.toLowerCase())),
+        [items, query]
+    );
+
+    // useCallback — stable handler for memoised child
+    const handleSelect = useCallback((id) => {
+        console.log('Selected:', id);
+    }, []);
+
+    return (
+        <View>
+            <TextInput
+                testID="search-input"
+                value={query}
+                onChangeText={setQuery}
+                placeholder="Search..."
+            />
+            <Text testID="result-count">{filtered.length} results</Text>
+            {filtered.map(item => (
+                <Pressable key={item.id} testID={`item-${item.id}`} onPress={() => handleSelect(item.id)}>
+                    <Text>{item.name}</Text>
+                </Pressable>
+            ))}
+        </View>
+    );
+};
+
+test('filters items based on search query', async () => {
+    const items = [
+        { id: '1', name: 'Devesh Kumar' },
+        { id: '2', name: 'Priya Singh' },
+        { id: '3', name: 'Deepak Verma' },
+    ];
+    render(<SearchableList items={items} />);
+
+    // All shown initially
+    expect(screen.getByTestId('result-count')).toHaveTextContent('3 results');
+
+    // Filter by 'Dev'
+    fireEvent.changeText(screen.getByTestId('search-input'), 'Dev');
+    await waitFor(() => {
+        expect(screen.getByTestId('result-count')).toHaveTextContent('2 results');
+        expect(screen.getByText('Devesh Kumar')).toBeTruthy();
+        expect(screen.getByText('Deepak Verma')).toBeTruthy();
+        expect(screen.queryByText('Priya Singh')).toBeNull();
+    });
+
+    // Clear filter
+    fireEvent.changeText(screen.getByTestId('search-input'), '');
+    await waitFor(() => {
+        expect(screen.getByTestId('result-count')).toHaveTextContent('3 results');
+    });
+});
+```
+
+---
+
+### Q411. How do you mock `NativeEventEmitter` in tests?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Native Events Testing
+
+**Answer:**
+```js
+// Mock NativeEventEmitter
+jest.mock('react-native', () => {
+    const RN = jest.requireActual('react-native');
+
+    // Create a simple mock emitter
+    class MockNativeEventEmitter {
+        listeners: Record<string, Function[]> = {};
+
+        addListener(event: string, handler: Function) {
+            this.listeners[event] = this.listeners[event] || [];
+            this.listeners[event].push(handler);
+            return { remove: () => this.removeListener(event, handler) };
+        }
+
+        removeListener(event: string, handler: Function) {
+            this.listeners[event] = (this.listeners[event] || []).filter(h => h !== handler);
+        }
+
+        emit(event: string, data: any) {
+            (this.listeners[event] || []).forEach(h => h(data));
+        }
+    }
+
+    return {
+        ...RN,
+        NativeEventEmitter: MockNativeEventEmitter,
+    };
+});
+
+// Test component that listens to native events
+test('LocationTracker updates on position change', async () => {
+    const { NativeEventEmitter } = require('react-native');
+    const { NativeModules } = require('react-native');
+
+    render(<LocationTracker />);
+
+    // Get reference to the emitter instance
+    const emitter = new NativeEventEmitter(NativeModules.LocationModule);
+
+    // Simulate a native event
+    act(() => {
+        emitter.emit('onLocationUpdate', {
+            latitude: 28.6139,
+            longitude: 77.2090,
+            accuracy: 10,
+        });
+    });
+
+    await waitFor(() => {
+        expect(screen.getByTestId('lat')).toHaveTextContent('28.6139');
+        expect(screen.getByTestId('lng')).toHaveTextContent('77.2090');
+    });
+
+    // Simulate another event
+    act(() => {
+        emitter.emit('onLocationError', { message: 'GPS unavailable' });
+    });
+
+    await screen.findByText('GPS unavailable');
+});
+```
+
+---
+
+### Q412. How do you test components with `Platform.OS`?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Platform Testing
+
+**Answer:**
+```js
+// Component that has platform-specific behaviour
+const ShadowCard = ({ children }) => {
+    return (
+        <View
+            testID="shadow-card"
+            style={[
+                styles.card,
+                Platform.OS === 'ios'
+                    ? styles.iosShadow
+                    : styles.androidShadow,
+            ]}
+        >
+            {children}
+        </View>
+    );
+};
+
+// Test iOS behaviour
+describe('ShadowCard on iOS', () => {
+    beforeAll(() => {
+        jest.mock('react-native/Libraries/Utilities/Platform', () => ({
+            OS: 'ios',
+            select: (obj) => obj.ios,
+        }));
+    });
+
+    it('applies iOS shadow styles', () => {
+        render(<ShadowCard><Text>Content</Text></ShadowCard>);
+        const card = screen.getByTestId('shadow-card');
+        expect(card.props.style).toContainEqual(
+            expect.objectContaining({ shadowColor: '#000' })
+        );
+    });
+});
+
+// Better: use Platform mock per-test
+describe('ShadowCard', () => {
+    it('applies iOS styles on iOS', () => {
+        jest.replaceProperty(require('react-native').Platform, 'OS', 'ios');
+        render(<ShadowCard><Text>Content</Text></ShadowCard>);
+        const card = screen.getByTestId('shadow-card');
+        // assert ios styles
+    });
+
+    it('applies Android styles on Android', () => {
+        jest.replaceProperty(require('react-native').Platform, 'OS', 'android');
+        render(<ShadowCard><Text>Content</Text></ShadowCard>);
+        const card = screen.getByTestId('shadow-card');
+        // assert android styles (elevation instead of shadow)
+    });
+});
+
+// Even better: use jest.config.js testEnvironmentOptions
+// For platform-specific test files:
+// Component.ios.test.tsx — jest uses 'ios' preset
+// Component.android.test.tsx — jest uses 'android' preset
+```
+
+---
+
+### Q413. What is the `debug()` function in RNTL and when do you use it?
+
+**Difficulty:** 🟢 Easy | **Frequency:** Medium | **Category:** RNTL Debugging
+
+**Answer:**
+```js
+import { render, screen } from '@testing-library/react-native';
+
+// debug() — prints the rendered component tree to console
+test('debugging a test', () => {
+    render(<LoginForm />);
+
+    // Print entire tree
+    screen.debug();
+
+    // Print specific element
+    screen.debug(screen.getByTestId('login-button'));
+
+    // Set max depth (default: 6)
+    screen.debug({ maxDepth: 3 });
+});
+
+// Output looks like:
+// <View>
+//   <TextInput
+//     accessibilityLabel="Email address"
+//     placeholder="Email"
+//     testID="email-input"
+//   />
+//   <Pressable
+//     accessibilityRole="button"
+//     testID="login-button"
+//   >
+//     <Text>Login</Text>
+//   </Pressable>
+// </View>
+
+// Common debugging scenarios:
+// 1. "Unable to find element" — debug() to see what's actually rendered
+test('submit button found', () => {
+    render(<Form />);
+    screen.debug(); // find the actual testID/text in output
+    const button = screen.getByTestId('submit-btn'); // use exact testID from debug output
+});
+
+// 2. Accessibility queries failing — debug to check accessible props
+test('debug accessibility', () => {
+    render(<IconButton icon="delete" accessibilityLabel="Delete item" />);
+    screen.debug();
+    // See: accessibilityLabel="Delete item" in output
+    screen.getByLabelText('Delete item'); // now works
+});
+
+// 3. Testing async — debug after waitFor to see final state
+await waitFor(() => {
+    screen.debug(); // shows what's rendered after async update
+    expect(screen.getByText('Loaded')).toBeTruthy();
+});
+```
+
+---
+
+### Q414. How do you test `useEffect` cleanup?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** Hook Testing
+
+**Answer:**
+```js
+// Component with cleanup
+const WebSocketConnection = ({ url, onMessage }) => {
+    useEffect(() => {
+        const ws = new WebSocket(url);
+        ws.onmessage = (event) => onMessage(event.data);
+
+        return () => {
+            ws.close(); // CLEANUP
+        };
+    }, [url, onMessage]);
+
+    return <View testID="ws-component" />;
+};
+
+// Mock WebSocket
+const mockWsClose = jest.fn();
+const mockWsInstance = {
+    close: mockWsClose,
+    onmessage: null,
+    send: jest.fn(),
+};
+global.WebSocket = jest.fn().mockImplementation(() => mockWsInstance);
+
+describe('WebSocketConnection', () => {
+    beforeEach(() => {
+        mockWsClose.mockClear();
+        global.WebSocket.mockClear();
+    });
+
+    it('opens WebSocket on mount', () => {
+        render(<WebSocketConnection url="ws://test.com" onMessage={jest.fn()} />);
+        expect(global.WebSocket).toHaveBeenCalledWith('ws://test.com');
+    });
+
+    it('closes WebSocket on unmount (cleanup)', () => {
+        const { unmount } = render(
+            <WebSocketConnection url="ws://test.com" onMessage={jest.fn()} />
+        );
+
+        expect(mockWsClose).not.toHaveBeenCalled();
+
+        unmount(); // triggers useEffect cleanup
+
+        expect(mockWsClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('reopens WebSocket when URL changes', () => {
+        const { rerender } = render(
+            <WebSocketConnection url="ws://server1.com" onMessage={jest.fn()} />
+        );
+        expect(global.WebSocket).toHaveBeenCalledTimes(1);
+
+        rerender(<WebSocketConnection url="ws://server2.com" onMessage={jest.fn()} />);
+
+        // Cleanup of old connection + new connection
+        expect(mockWsClose).toHaveBeenCalledTimes(1);
+        expect(global.WebSocket).toHaveBeenCalledTimes(2);
+        expect(global.WebSocket).toHaveBeenLastCalledWith('ws://server2.com');
+    });
+});
+```
+
+---
+
+### Q415. How do you achieve 80%+ test coverage in a React Native app?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Testing Strategy
+
+**Answer:**
+```
+Coverage strategy — what to test at each level:
+
+1. Utility functions (100% coverage goal)
+   - formatCurrency, validateEmail, calculateLeaveBalance
+   - Pure functions — easy to test, high value
+
+2. Custom hooks (90%+ coverage)
+   - useAuth, useAttendance, usePayroll
+   - Test all states: loading, success, error
+
+3. Redux/Zustand (90%+ coverage)
+   - Reducers, selectors, sagas/thunks
+   - All action types + error cases
+
+4. Business-critical components (80%+ coverage)
+   - Payment forms, attendance marking, leave requests
+   - All user paths including error states
+
+5. UI components (60%+ coverage)
+   - Buttons, inputs, cards
+   - Focus on behaviour, not visual details
+
+6. Screens (50%+ coverage)
+   - Integration tests for main user flows
+   - Unit test individual sections
+```
+
+```js
+// What NOT to test (low value):
+// - Inline styles (verify in Storybook)
+// - Third-party component props (they test themselves)
+// - Static constants
+// - Simple re-export files
+
+// High-value tests to add first:
+// 1. Authentication flow (login, logout, session expiry)
+// 2. Form validation (all error cases)
+// 3. API error handling (network failures, 401, 500)
+// 4. Navigation guards (unauthenticated redirect)
+// 5. Data formatting utilities (currency, dates, names)
+
+// Coverage improvement workflow:
+// 1. npm run test:coverage
+// 2. Open coverage/lcov-report/index.html
+// 3. Find uncovered branches (yellow/red)
+// 4. Write tests for uncovered branches
+// 5. Repeat
+
+// Quick wins for branch coverage:
+// Test both sides of every conditional:
+// if (isActive) ... → test isActive=true AND isActive=false
+// error && <ErrorText> → test with and without error
+// item ?? defaultValue → test with null AND with value
+```
+
+---
+
+### Q416. How do you test a component that uses `react-query` / TanStack Query?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** React Query Testing
+
+**Answer:**
+```js
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
+// Create a fresh QueryClient for each test (prevent cache sharing)
+const createTestQueryClient = () =>
+    new QueryClient({
+        defaultOptions: {
+            queries: {
+                retry: false, // don't retry failed queries in tests
+                gcTime: 0,    // don't cache between tests
+            },
+        },
+    });
+
+// Render wrapper
+const renderWithQuery = (ui: React.ReactElement) => {
+    const queryClient = createTestQueryClient();
+    const Wrapper = ({ children }) => (
+        <QueryClientProvider client={queryClient}>
+            {children}
+        </QueryClientProvider>
+    );
+    return render(ui, { wrapper: Wrapper });
+};
+
+// Component under test
+const EmployeeProfile = ({ id }) => {
+    const { data, isLoading, isError } = useQuery({
+        queryKey: ['employee', id],
+        queryFn: () => api.fetchEmployee(id),
+    });
+
+    if (isLoading) return <ActivityIndicator testID="loader" />;
+    if (isError) return <Text testID="error">Failed to load</Text>;
+    return <Text testID="name">{data?.name}</Text>;
+};
+
+// Tests
+describe('EmployeeProfile', () => {
+    it('shows loading state', async () => {
+        jest.mocked(api.fetchEmployee).mockReturnValue(new Promise(() => {})); // never resolves
+        renderWithQuery(<EmployeeProfile id="1" />);
+        expect(screen.getByTestId('loader')).toBeTruthy();
+    });
+
+    it('shows employee name on success', async () => {
+        jest.mocked(api.fetchEmployee).mockResolvedValue({ id: '1', name: 'Devesh Kumar' });
+        renderWithQuery(<EmployeeProfile id="1" />);
+        await screen.findByTestId('name');
+        expect(screen.getByTestId('name')).toHaveTextContent('Devesh Kumar');
+    });
+
+    it('shows error on failure', async () => {
+        jest.mocked(api.fetchEmployee).mockRejectedValue(new Error('Not found'));
+        renderWithQuery(<EmployeeProfile id="1" />);
+        await screen.findByTestId('error');
+    });
+});
+```
+
+---
+
+### Q417. How do you write tests that are resilient to refactoring?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Testing Best Practices
+
+**Answer:**
+```js
+// The "testing trophy" principle: test what users care about, not implementation
+
+// ❌ Fragile — tests implementation details
+test('sets isLoading to true then false', () => {
+    const wrapper = enzyme.mount(<LoginForm />);
+    expect(wrapper.state('isLoading')).toBe(false);
+
+    wrapper.find('button').simulate('click');
+    expect(wrapper.state('isLoading')).toBe(true);
+    // BREAKS if you rename isLoading or move it to Context
+});
+
+// ✅ Resilient — tests what user experiences
+test('shows loading indicator during login', async () => {
+    jest.mocked(api.login).mockReturnValue(new Promise(resolve => setTimeout(resolve, 100)));
+    render(<LoginForm />);
+
+    fireEvent.press(screen.getByText('Login'));
+
+    // User sees loading spinner
+    expect(screen.getByTestId('loading-spinner')).toBeTruthy();
+
+    await waitFor(() => expect(screen.queryByTestId('loading-spinner')).toBeNull());
+    // SURVIVES refactoring state management
+});
+
+// Resilience checklist:
+// ✅ Query by accessibility role/label (not internal IDs)
+screen.getByRole('button', { name: 'Submit' })  // resilient
+screen.getByTestId('submit-btn')                 // OK, but change testID = test breaks
+
+// ✅ Test outcomes, not implementation
+expect(onSubmit).toHaveBeenCalledWith(formData)  // resilient
+expect(component.state.submitted).toBe(true)     // fragile
+
+// ✅ Avoid querying by component class name
+screen.getByRole('textbox')                  // resilient
+screen.getByType(TextInput)                  // fragile (Enzyme-style)
+
+// ✅ Don't test prop drilling
+// Don't test that ChildComponent receives 'onPress' prop
+// Test that pressing the button calls the expected action
+```
+
+---
+
+### Q418. How do you set up test coverage gates in CI/CD?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** CI Testing
+
+**Answer:**
+```json
+// package.json — coverage thresholds (fails CI if below)
+{
+  "jest": {
+    "coverageThreshold": {
+      "global": {
+        "branches": 60,
+        "functions": 70,
+        "lines": 70,
+        "statements": 70
+      },
+      "./src/utils/": {
+        "branches": 90,
+        "functions": 100
+      },
+      "./src/api/": {
+        "branches": 80,
+        "functions": 90
+      }
+    }
+  }
+}
+```
+
+```yaml
+# GitHub Actions — coverage gate + reporting
+- name: Run tests with coverage
+  run: npx jest --ci --coverage --coverageReporters=json --coverageReporters=lcov
+
+- name: Check coverage thresholds
+  run: |
+    COVERAGE=$(cat coverage/coverage-summary.json | jq '.total.lines.pct')
+    echo "Line coverage: $COVERAGE%"
+    if (( $(echo "$COVERAGE < 70" | bc -l) )); then
+      echo "Coverage below threshold!"
+      exit 1
+    fi
+
+- name: Upload to Codecov
+  uses: codecov/codecov-action@v3
+  with:
+    file: ./coverage/lcov.info
+    fail_ci_if_error: true
+    threshold: 70   # Codecov also enforces threshold
+
+- name: Comment coverage on PR
+  uses: romeovs/lcov-reporter-action@v0.3.1
+  with:
+    lcov-file: ./coverage/lcov.info
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+```bash
+# Local coverage check before push
+npm run test:coverage -- --passWithNoTests
+# Exit code 1 if below threshold → CI will catch it
+```
+
+---
+
+### Q419. How do you test internationalization (i18n) in React Native?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Medium | **Category:** i18n Testing
+
+**Answer:**
+```js
+// Mock i18n library (react-i18next)
+jest.mock('react-i18next', () => ({
+    useTranslation: () => ({
+        t: (key: string, params?: object) => {
+            // Simple mock — return key or formatted string
+            if (params) {
+                return `${key}(${JSON.stringify(params)})`;
+            }
+            return key;
+        },
+        i18n: { language: 'en', changeLanguage: jest.fn() },
+    }),
+    Trans: ({ children }) => children,
+    withTranslation: () => (Component) => Component,
+}));
+
+// Test with actual translations (integration test)
+import i18n from '../src/i18n';
+import { I18nextProvider } from 'react-i18next';
+
+const renderWithI18n = (ui: React.ReactElement, locale = 'en') => {
+    const testI18n = i18n.cloneInstance();
+    testI18n.changeLanguage(locale);
+
+    return render(
+        <I18nextProvider i18n={testI18n}>{ui}</I18nextProvider>
+    );
+};
+
+test('renders in English', () => {
+    renderWithI18n(<LoginScreen />, 'en');
+    expect(screen.getByText('Login')).toBeTruthy();
+    expect(screen.getByPlaceholderText('Email address')).toBeTruthy();
+});
+
+test('renders in Hindi', () => {
+    renderWithI18n(<LoginScreen />, 'hi');
+    expect(screen.getByText('लॉगिन')).toBeTruthy();
+});
+
+// Test locale-specific formatting
+test('formatDate uses correct locale', () => {
+    renderWithI18n(<AttendanceDate date={new Date('2024-01-15')} />, 'en-IN');
+    expect(screen.getByText('15 Jan 2024')).toBeTruthy(); // Indian date format
+});
+
+// Test RTL layout switching (for Arabic/Hindi)
+test('layout mirrors for RTL locale', () => {
+    renderWithI18n(<NavigationHeader />, 'ar');
+    const header = screen.getByTestId('header');
+    expect(header.props.style).toContainEqual({ flexDirection: 'row-reverse' });
+});
+```
+
+---
+
+### Q420. What is the best testing strategy for a production React Native app?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Very High | **Category:** Testing Strategy
+
+**Answer:**
+```
+Production testing strategy for a 10-12 LPA React Native role:
+
+Layer 1 — Static Analysis (fast, free, always on)
+├── TypeScript — type errors caught at compile time
+├── ESLint — code quality, common bugs
+└── Prettier — consistent formatting
+
+Layer 2 — Unit Tests (fast, ~70% of tests)
+├── All utility functions (100% coverage)
+├── All Redux reducers + selectors (100% coverage)
+├── All custom hooks (90%+ coverage)
+├── All API service functions (90%+ coverage)
+└── Run on every commit — ~30 seconds
+
+Layer 3 — Integration Tests (medium, ~20% of tests)
+├── Complete screens with mocked API
+├── Full user flows (login, checkout, form submission)
+├── All error states and edge cases
+└── Run on every PR — ~3 minutes
+
+Layer 4 — E2E Tests (slow, ~10% of tests)
+├── Login and authentication
+├── Core user journeys (5-8 flows max)
+├── Regression suite for critical paths
+└── Run nightly / pre-release — ~30 minutes
+
+Layer 5 — Manual QA (exploratory)
+├── New features on real devices
+├── Edge cases on different OS versions
+└── Performance testing on low-end devices
+```
+
+```js
+// Practical implementation tips for your ERP app:
+
+// 1. Critical paths to always test:
+const criticalPaths = [
+    'Employee login/logout and session management',
+    'Attendance check-in/check-out',
+    'Leave request submission and approval',
+    'Payslip generation and download',
+    'Biometric authentication flow',
+];
+
+// 2. Test file co-location (preferred)
+// src/components/EmployeeCard/
+//   EmployeeCard.tsx
+//   EmployeeCard.test.tsx  ← co-located
+//   EmployeeCard.stories.tsx
+
+// 3. CI gates
+// PR → unit + integration must pass (< 5 min)
+// Merge to main → full suite including E2E (< 30 min)
+// Release → manual QA + performance testing on devices
+
+// 4. Coverage targets (realistic for 10-12 LPA level)
+// utils/: 95%
+// hooks/: 85%
+// store/: 80%
+// components/: 70%
+// screens/: 60%
+// Overall: 70%+
+
+// 5. What to say in interviews about testing:
+// "We had 68% coverage with RNTL + Jest.
+//  Detox covered our 5 critical user journeys.
+//  We ran tests in CI with GitHub Actions —
+//  unit tests on every PR, E2E on every release.
+//  This helped us catch a payroll calculation bug
+//  that would have affected salary disbursement."
+```
+
+---
+
+## Sections Overview (Q421–Q500)
+
+| Section | Questions | Topics |
+|---------|-----------|--------|
+| Debugging | Q421–Q450 | Flipper, Hermes debugger, crash reporting |
+| Storage & Permissions | Q451–Q480 | AsyncStorage, Keychain, permission flows |
+| Miscellaneous | Q481–Q500 | Accessibility, internationalisation, misc APIs |
+
+---
+
+> 💡 **Tip for GitHub:** Add a `## Table of Contents` section at the top with anchor links to each question for easy navigation.
+
+---
+
+*Part 01 of 8 — [← Back to Part README](./README.md) · [← Main README](../README.md)*
