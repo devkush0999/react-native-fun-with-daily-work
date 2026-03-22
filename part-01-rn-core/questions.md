@@ -24434,7 +24434,775 @@ const debugConfig = {
 
 ---
 
-## Sections Overview (Q451–Q500)
+
+## Section 12: Storage & Permissions (Q451–Q480)
+
+---
+
+### Q451. What are the storage options in React Native and when do you use each?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Storage Overview
+
+**Answer:**
+
+| Storage | Type | Speed | Capacity | Encryption | Best for |
+|---------|------|-------|----------|-----------|---------|
+| AsyncStorage | Async KV | Slow | ~6MB (iOS) | ❌ | Simple user preferences |
+| MMKV | Sync KV | Very fast | Unlimited | ✅ AES-256 | App state, auth tokens |
+| SQLite (WatermelonDB) | Relational DB | Fast | Unlimited | ✅ (optional) | Complex relational data |
+| Realm | Object DB | Fast | Unlimited | ✅ | Offline-first apps |
+| Keychain (iOS) / Keystore (Android) | Secure KV | Medium | Small | ✅ Hardware | Passwords, sensitive tokens |
+| FileSystem | Files | Varies | Device storage | ❌ | Large files, downloads |
+| Redux Persist | In-memory + disk | Depends on adapter | Same as adapter | ❌ | Redux state persistence |
+
+```js
+// Quick decision guide:
+
+// Auth tokens (JWT, refresh tokens) → Keychain/Keystore
+import * as Keychain from 'react-native-keychain';
+await Keychain.setInternetCredentials('api.example.com', username, token);
+
+// User preferences (theme, language, notifications) → MMKV
+import { MMKV } from 'react-native-mmkv';
+const storage = new MMKV();
+storage.set('theme', 'dark');
+
+// Offline data (employee list, products) → WatermelonDB / SQLite
+// 10,000+ records that need querying → relational DB
+
+// Cached API responses → React Query / SWR (in-memory + optional persist)
+
+// Large files (PDFs, downloads) → expo-file-system / react-native-fs
+import * as FileSystem from 'expo-file-system';
+await FileSystem.downloadAsync(url, FileSystem.documentDirectory + 'payslip.pdf');
+```
+
+---
+
+### Q452. What is AsyncStorage and what are its limitations?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** AsyncStorage
+
+**Answer:**
+AsyncStorage is React Native's built-in unencrypted, asynchronous, key-value storage. It persists across app restarts.
+
+```js
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Basic CRUD
+await AsyncStorage.setItem('userId', '42');
+const userId = await AsyncStorage.getItem('userId'); // '42' or null
+
+await AsyncStorage.removeItem('userId');
+await AsyncStorage.clear(); // removes ALL keys
+
+// Multi operations (batched — more efficient than individual calls)
+await AsyncStorage.multiSet([
+    ['theme', 'dark'],
+    ['language', 'en'],
+    ['notificationsEnabled', 'true'],
+]);
+
+const values = await AsyncStorage.multiGet(['theme', 'language']);
+// [['theme', 'dark'], ['language', 'en']]
+
+const keys = await AsyncStorage.getAllKeys();
+// ['theme', 'language', 'notificationsEnabled']
+
+await AsyncStorage.multiRemove(['theme', 'language']);
+
+// Storing objects (must serialise)
+const user = { id: '1', name: 'Devesh', role: 'Developer' };
+await AsyncStorage.setItem('user', JSON.stringify(user));
+const stored = await AsyncStorage.getItem('user');
+const parsed = stored ? JSON.parse(stored) : null;
+```
+
+**Limitations:**
+```
+❌ No encryption — anyone with physical access can read data
+❌ 6MB limit on iOS (configurable, but still limited)
+❌ Asynchronous only — can't read synchronously
+❌ Slow compared to MMKV (~5-20ms per read vs <0.1ms for MMKV)
+❌ No data types — everything stored as strings
+❌ No querying — can't search by value, only by key
+❌ Android: data loss on app reinstall (without backup flag)
+❌ Not suitable for sensitive data (passwords, tokens)
+❌ Bridge overhead in old architecture
+```
+
+**When to use anyway:**
+- Non-sensitive user preferences
+- Feature flags, onboarding state
+- Simple configuration
+- When you don't want an extra dependency
+
+---
+
+### Q453. What is MMKV and how do you use it?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** MMKV Storage
+
+**Answer:**
+MMKV is a C++-backed key-value storage library, 10-100x faster than AsyncStorage. Fully synchronous — no await needed.
+
+```bash
+npm install react-native-mmkv
+cd ios && pod install
+```
+
+```js
+import { MMKV } from 'react-native-mmkv';
+
+// Default storage instance
+const storage = new MMKV();
+
+// Named instance (multiple isolated stores)
+const userStorage = new MMKV({ id: 'user-storage' });
+const cacheStorage = new MMKV({ id: 'cache-storage' });
+
+// Encrypted storage (AES-256)
+const secureStorage = new MMKV({
+    id: 'secure-storage',
+    encryptionKey: 'my-32-char-encryption-key-here!!',
+    // Best practice: generate key at runtime (not hardcoded)
+    // const key = await generateDeviceSecureKey();
+});
+
+// Reading (synchronous — no await!)
+const theme = storage.getString('theme');         // string | undefined
+const count = storage.getNumber('loginCount');    // number | undefined
+const isLoggedIn = storage.getBoolean('logged');  // boolean | undefined
+const data = storage.getBuffer('binaryData');     // ArrayBuffer | undefined
+const contains = storage.contains('theme');       // boolean
+
+// Writing (synchronous)
+storage.set('theme', 'dark');
+storage.set('loginCount', 5);
+storage.set('logged', true);
+storage.set('user', JSON.stringify({ id: '1', name: 'Devesh' }));
+
+// Delete
+storage.delete('theme');
+storage.clearAll(); // clear all keys in this instance
+
+// Get all keys
+const keys = storage.getAllKeys(); // string[]
+
+// Listen for changes (reactive)
+const listener = storage.addOnValueChangedListener((changedKey) => {
+    console.log(`MMKV changed: ${changedKey}`);
+    const newValue = storage.getString(changedKey);
+    // Update React state
+});
+// Remove listener on unmount
+return () => listener.remove();
+```
+
+```js
+// Custom hook for reactive MMKV value
+const useMMKVString = (key: string, defaultValue = '') => {
+    const [value, setValue] = useState<string>(
+        () => storage.getString(key) ?? defaultValue
+    );
+
+    useEffect(() => {
+        const listener = storage.addOnValueChangedListener((changedKey) => {
+            if (changedKey === key) {
+                setValue(storage.getString(key) ?? defaultValue);
+            }
+        });
+        return () => listener.remove();
+    }, [key]);
+
+    const setStoredValue = useCallback((newValue: string) => {
+        storage.set(key, newValue);
+        setValue(newValue);
+    }, [key]);
+
+    return [value, setStoredValue] as const;
+};
+
+// Usage
+const [theme, setTheme] = useMMKVString('theme', 'light');
+```
+
+---
+
+### Q454. How do you implement secure storage for sensitive data?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Very High | **Category:** Secure Storage
+
+**Answer:**
+```bash
+# Option 1: expo-secure-store (Expo — simplest)
+npx expo install expo-secure-store
+
+# Option 2: react-native-keychain (bare RN — more control)
+npm install react-native-keychain
+cd ios && pod install
+```
+
+```js
+// expo-secure-store (Expo)
+import * as SecureStore from 'expo-secure-store';
+
+// Store
+await SecureStore.setItemAsync('authToken', 'jwt-token-here', {
+    requireAuthentication: true,    // require biometric/PIN to read
+    keychainService: 'com.company.app',
+    keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+});
+
+// Read
+const token = await SecureStore.getItemAsync('authToken');
+
+// Delete
+await SecureStore.deleteItemAsync('authToken');
+
+// Check availability (some devices don't support it)
+const available = await SecureStore.isAvailableAsync();
+```
+
+```js
+// react-native-keychain (bare RN — more options)
+import * as Keychain from 'react-native-keychain';
+
+// Store credentials (username + password)
+await Keychain.setInternetCredentials(
+    'api.yourapp.com',    // server/service key
+    'devesh@company.com', // username
+    'jwt-token-here'      // password/token
+);
+
+// Read credentials
+const creds = await Keychain.getInternetCredentials('api.yourapp.com');
+if (creds) {
+    console.log('Username:', creds.username);
+    console.log('Token:', creds.password);
+}
+
+// Store with biometric protection
+await Keychain.setGenericPassword('user', 'sensitive-data', {
+    accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_ANY,
+    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    authenticationPrompt: {
+        title: 'Authenticate to access your data',
+        cancel: 'Cancel',
+    },
+});
+
+// Read biometric-protected value
+const result = await Keychain.getGenericPassword({
+    authenticationPrompt: { title: 'Verify your identity' },
+});
+
+// Delete
+await Keychain.resetInternetCredentials('api.yourapp.com');
+await Keychain.resetGenericPassword();
+
+// Check biometric hardware availability
+const biometricType = await Keychain.getSupportedBiometryType();
+// BIOMETRY_TYPE.TOUCH_ID | FACE_ID | FINGERPRINT | FACE | IRIS | null
+```
+
+---
+
+### Q455. What is WatermelonDB and when should you use it?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** SQLite / WatermelonDB
+
+**Answer:**
+WatermelonDB is a high-performance SQLite-backed database for React Native. Uses lazy loading and observable queries for efficient sync with large datasets.
+
+```bash
+npm install @nozbe/watermelondb
+npm install @nozbe/with-observables
+```
+
+```js
+// 1. Define models
+// models/Employee.ts
+import { Model } from '@nozbe/watermelondb';
+import { field, date, relation, children } from '@nozbe/watermelondb/decorators';
+
+export class Employee extends Model {
+    static table = 'employees';
+
+    @field('name') name!: string;
+    @field('email') email!: string;
+    @field('department') department!: string;
+    @field('salary') salary!: number;
+    @field('is_active') isActive!: boolean;
+    @date('hired_at') hiredAt!: Date;
+    @relation('departments', 'department_id') dept!: Department;
+}
+
+// 2. Define schema
+// schema.ts
+import { appSchema, tableSchema } from '@nozbe/watermelondb';
+
+export const schema = appSchema({
+    version: 1,
+    tables: [
+        tableSchema({
+            name: 'employees',
+            columns: [
+                { name: 'name', type: 'string' },
+                { name: 'email', type: 'string' },
+                { name: 'department', type: 'string' },
+                { name: 'salary', type: 'number' },
+                { name: 'is_active', type: 'boolean' },
+                { name: 'hired_at', type: 'number' },
+                { name: 'department_id', type: 'string', isOptional: true },
+            ],
+        }),
+    ],
+});
+
+// 3. Setup database
+// database.ts
+import { Database } from '@nozbe/watermelondb';
+import SQLiteAdapter from '@nozbe/watermelondb/adapters/sqlite';
+
+const adapter = new SQLiteAdapter({
+    schema,
+    jsi: true,            // enables JSI for ~2x speed
+    onSetUpError: (error) => Sentry.captureException(error),
+});
+
+export const database = new Database({
+    adapter,
+    modelClasses: [Employee],
+});
+
+// 4. CRUD operations
+// Create
+await database.write(async () => {
+    const employee = await database.get<Employee>('employees').create(emp => {
+        emp.name = 'Devesh Kumar';
+        emp.email = 'devesh@company.com';
+        emp.salary = 85000;
+        emp.isActive = true;
+    });
+    console.log('Created:', employee.id);
+});
+
+// Read (lazy — only loads when subscribed)
+const employees = database.get<Employee>('employees').query();
+
+// Filter + sort
+const activeEmployees = database.get<Employee>('employees')
+    .query(
+        Q.where('is_active', true),
+        Q.where('department', 'Engineering'),
+        Q.sortBy('name', Q.asc),
+        Q.take(50)  // pagination
+    );
+
+// Observe (reactive — updates on DB change)
+const EngineeringList = withObservables(['query'], ({ query }) => ({
+    employees: query,
+}))(({ employees }) => (
+    <FlatList data={employees} renderItem={({ item }) => <EmployeeRow employee={item} />} />
+));
+
+// Update
+await database.write(async () => {
+    await employee.update(emp => {
+        emp.salary = 95000;
+    });
+});
+
+// Delete
+await database.write(async () => {
+    await employee.markAsDeleted(); // soft delete
+    // or: await employee.destroyPermanently();
+});
+```
+
+---
+
+### Q456. How do you persist Redux state to storage?
+
+**Difficulty:** 🟡 Medium | **Frequency:** High | **Category:** Redux Persistence
+
+**Answer:**
+```bash
+npm install redux-persist
+# AsyncStorage adapter (default)
+npm install @react-native-async-storage/async-storage
+# OR MMKV adapter (faster)
+npm install react-native-mmkv
+```
+
+```js
+// store.ts — redux-persist with MMKV (recommended)
+import { configureStore, combineReducers } from '@reduxjs/toolkit';
+import { persistStore, persistReducer, FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER } from 'redux-persist';
+import { MMKV } from 'react-native-mmkv';
+
+// MMKV storage adapter
+const storage = new MMKV();
+const mmkvStorage = {
+    setItem: (key: string, value: string) => {
+        storage.set(key, value);
+        return Promise.resolve(true);
+    },
+    getItem: (key: string) => {
+        const value = storage.getString(key);
+        return Promise.resolve(value);
+    },
+    removeItem: (key: string) => {
+        storage.delete(key);
+        return Promise.resolve();
+    },
+};
+
+const persistConfig = {
+    key: 'root',
+    storage: mmkvStorage,
+    whitelist: ['auth', 'userPreferences'],  // only persist these slices
+    blacklist: ['loadingState', 'tempData'],  // never persist these
+};
+
+const rootReducer = combineReducers({
+    auth: authReducer,
+    employees: employeesReducer,
+    userPreferences: preferencesReducer,
+    loadingState: loadingReducer,
+});
+
+const persistedReducer = persistReducer(persistConfig, rootReducer);
+
+export const store = configureStore({
+    reducer: persistedReducer,
+    middleware: (getDefaultMiddleware) =>
+        getDefaultMiddleware({
+            serializableCheck: {
+                // redux-persist uses non-serialisable values
+                ignoredActions: [FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER],
+            },
+        }),
+});
+
+export const persistor = persistStore(store);
+
+// App.tsx — wrap with PersistGate
+import { PersistGate } from 'redux-persist/integration/react';
+
+export default function App() {
+    return (
+        <Provider store={store}>
+            <PersistGate loading={<SplashScreen />} persistor={persistor}>
+                <AppContent />
+            </PersistGate>
+        </Provider>
+    );
+}
+
+// Clear persisted state (logout)
+await persistor.purge();
+```
+
+---
+
+### Q457. How do you handle storage migration when your data schema changes?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Storage Migration
+
+**Answer:**
+```js
+// MMKV / AsyncStorage migrations (key-value)
+const CURRENT_SCHEMA_VERSION = 3;
+
+const migrateStorage = async () => {
+    const version = storage.getNumber('schemaVersion') ?? 0;
+
+    if (version < 1) {
+        // Migration 1: rename 'auth_token' → 'authToken'
+        const oldToken = storage.getString('auth_token');
+        if (oldToken) {
+            storage.set('authToken', oldToken);
+            storage.delete('auth_token');
+        }
+        storage.set('schemaVersion', 1);
+    }
+
+    if (version < 2) {
+        // Migration 2: user object schema changed
+        const oldUser = storage.getString('user');
+        if (oldUser) {
+            const parsed = JSON.parse(oldUser);
+            // Add new required field with default
+            const migrated = { ...parsed, role: parsed.role ?? 'employee', v2: true };
+            storage.set('user', JSON.stringify(migrated));
+        }
+        storage.set('schemaVersion', 2);
+    }
+
+    if (version < 3) {
+        // Migration 3: move theme from MMKV to preferences object
+        const theme = storage.getString('theme');
+        const fontSize = storage.getString('fontSize');
+        if (theme || fontSize) {
+            storage.set('preferences', JSON.stringify({ theme: theme ?? 'light', fontSize: fontSize ?? 'medium' }));
+            storage.delete('theme');
+            storage.delete('fontSize');
+        }
+        storage.set('schemaVersion', 3);
+    }
+};
+
+// Call on app startup, before rendering
+useEffect(() => {
+    migrateStorage().then(() => setStorageReady(true));
+}, []);
+```
+
+```js
+// WatermelonDB migrations
+// schema.ts — version-based migrations
+import { schemaMigrations, createTable, addColumns } from '@nozbe/watermelondb/Schema/migrations';
+
+export const migrations = schemaMigrations({
+    migrations: [
+        {
+            toVersion: 2,
+            steps: [
+                addColumns({
+                    table: 'employees',
+                    columns: [
+                        { name: 'phone', type: 'string', isOptional: true },
+                        { name: 'blood_group', type: 'string', isOptional: true },
+                    ],
+                }),
+            ],
+        },
+        {
+            toVersion: 3,
+            steps: [
+                createTable({
+                    name: 'leave_requests',
+                    columns: [
+                        { name: 'employee_id', type: 'string' },
+                        { name: 'start_date', type: 'number' },
+                        { name: 'end_date', type: 'number' },
+                        { name: 'status', type: 'string' },
+                    ],
+                }),
+            ],
+        },
+    ],
+});
+
+// Database setup with migrations
+const adapter = new SQLiteAdapter({
+    schema,
+    migrations,   // ← pass migrations here
+    jsi: true,
+});
+```
+
+---
+
+### Q458. How do you implement offline-first data sync?
+
+**Difficulty:** 🔴 Hard | **Frequency:** High | **Category:** Offline Storage
+
+**Answer:**
+```js
+// WatermelonDB has a built-in sync protocol (Synchable)
+// Here's the pattern for your ERP app:
+
+// sync.ts — synchronisation logic
+import { synchronize } from '@nozbe/watermelondb/sync';
+import { database } from './database';
+
+export const syncWithServer = async () => {
+    try {
+        await synchronize({
+            database,
+
+            // Pull: get changes from server since last sync
+            pullChanges: async ({ lastPulledAt, schemaVersion, migration }) => {
+                const response = await api.pull({
+                    lastPulledAt: lastPulledAt ?? 0,
+                    schemaVersion,
+                    migration,
+                });
+
+                return {
+                    changes: response.changes,     // { employees: { created: [], updated: [], deleted: [] } }
+                    timestamp: response.timestamp, // server timestamp for next sync
+                };
+            },
+
+            // Push: send local changes to server
+            pushChanges: async ({ changes, lastPulledAt }) => {
+                await api.push({ changes, lastPulledAt });
+            },
+
+            // Handle conflicts (server wins by default)
+            conflictResolver: (tableName, local, remote) => {
+                // Custom conflict resolution
+                if (tableName === 'attendance') {
+                    // Attendance: trust server (manager may override)
+                    return remote;
+                }
+                // Default: merge with server winning on conflicts
+                return { ...local, ...remote };
+            },
+        });
+    } catch (error) {
+        console.error('Sync failed:', error);
+        throw error;
+    }
+};
+
+// Sync strategy in app
+const useSyncManager = () => {
+    const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'error'>('idle');
+    const [lastSynced, setLastSynced] = useState<Date | null>(null);
+
+    const sync = useCallback(async () => {
+        if (syncStatus === 'syncing') return;
+        setSyncStatus('syncing');
+        try {
+            await syncWithServer();
+            setLastSynced(new Date());
+            setSyncStatus('idle');
+        } catch (error) {
+            setSyncStatus('error');
+        }
+    }, [syncStatus]);
+
+    // Auto-sync on network reconnect
+    useEffect(() => {
+        const unsubscribe = NetInfo.addEventListener(state => {
+            if (state.isConnected && syncStatus === 'error') sync();
+        });
+        return unsubscribe;
+    }, [syncStatus, sync]);
+
+    // Sync on foreground
+    useEffect(() => {
+        const sub = AppState.addEventListener('change', state => {
+            if (state === 'active') sync();
+        });
+        return () => sub.remove();
+    }, [sync]);
+
+    return { syncStatus, lastSynced, sync };
+};
+```
+
+---
+
+### Q459. What is the Keychain access control and what are the options?
+
+**Difficulty:** 🔴 Hard | **Frequency:** Medium | **Category:** Keychain Security
+
+**Answer:**
+```js
+import * as Keychain from 'react-native-keychain';
+
+// ACCESS_CONTROL — when can the item be accessed?
+const ACCESS_CONTROL = {
+    // No access control (any time, no auth needed)
+    NONE: undefined,
+
+    // Require user presence (any: PIN, password, biometric)
+    USER_PRESENCE: Keychain.ACCESS_CONTROL.USER_PRESENCE,
+
+    // Require any enrolled biometric (no PIN fallback)
+    BIOMETRY_ANY: Keychain.ACCESS_CONTROL.BIOMETRY_ANY,
+
+    // Require current biometrics only (fails if biometrics change)
+    BIOMETRY_CURRENT_SET: Keychain.ACCESS_CONTROL.BIOMETRY_CURRENT_SET,
+
+    // Require device passcode (PIN/password)
+    DEVICE_PASSCODE: Keychain.ACCESS_CONTROL.DEVICE_PASSCODE,
+
+    // Biometric with PIN as fallback (most user-friendly)
+    BIOMETRY_ANY_OR_DEVICE_PASSCODE: Keychain.ACCESS_CONTROL.BIOMETRY_ANY_OR_DEVICE_PASSCODE,
+};
+
+// ACCESSIBLE — when is the keychain item accessible?
+const ACCESSIBLE = {
+    // Only when unlocked (most common)
+    WHEN_UNLOCKED: Keychain.ACCESSIBLE.WHEN_UNLOCKED,
+    // When unlocked, this device only (no iCloud backup — more secure)
+    WHEN_UNLOCKED_THIS_DEVICE_ONLY: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    // After first unlock (background processes can read)
+    AFTER_FIRST_UNLOCK: Keychain.ACCESSIBLE.AFTER_FIRST_UNLOCK,
+    // Always accessible (not recommended for sensitive data)
+    ALWAYS: Keychain.ACCESSIBLE.ALWAYS,
+};
+
+// Practical setup for auth token:
+await Keychain.setGenericPassword('user', authToken, {
+    service: 'com.yourcompany.app',
+    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    // No access control = readable without biometric (most apps)
+});
+
+// Practical setup for payment PIN / sensitive data:
+await Keychain.setGenericPassword('payment', paymentPin, {
+    service: 'com.yourcompany.app.payment',
+    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_ANY_OR_DEVICE_PASSCODE,
+});
+
+// Reading biometric-protected value
+try {
+    const result = await Keychain.getGenericPassword({
+        service: 'com.yourcompany.app.payment',
+        authenticationPrompt: {
+            title: 'Confirm payment',
+            subtitle: 'Use biometric to authorise ₹' + amount,
+            cancel: 'Cancel',
+        },
+    });
+    if (result) {
+        const pin = result.password;
+        processPayment(pin);
+    }
+} catch (error) {
+    if (error.message.includes('UserCancel')) {
+        Alert.alert('Payment cancelled');
+    }
+}
+```
+
+---
+
+### Q460. How do you implement the permissions request flow correctly?
+
+**Difficulty:** 🟡 Medium | **Frequency:** Very High | **Category:** Permissions
+
+**Answer:**
+```js
+import { PermissionsAndroid, Platform, Alert, Linking } from 'react-native';
+import { check, request, PERMISSIONS, RESULTS, openSettings } from 'react-native-permissions';
+
+// Complete permission request flow with all states
+const requestPermission = async (permission) => {
+    // Step 1: Check current status
+    const status = await check(permission);
+
+    switch (status) {
+        case RESULTS.GRANTED:
+            // Already granted — proceed
+            return 'granted';
+
+        case RESULTS.DENIED:
+            // Not asked yet or previously denied (can ask again)
+            const result = await request(permission);
+            return result === RESULTS.GRANTED ? '
+
+
+## Sections Overview (Q460–Q500)
 
 | Section | Questions | Topics |
 |---------|-----------|--------|
