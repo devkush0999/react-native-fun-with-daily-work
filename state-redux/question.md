@@ -1111,3 +1111,2438 @@ function* appInitSaga() {
 
 **Q135.** What is a "long-lived saga"?  
 **A:** A saga that runs for the app's lifetime 
+
+
+
+# 01 — Redux Fundamentals
+**Part 03 · State Management | React Native Interview Prep **
+> Topics: Store · Actions · Reducers · Dispatch · combineReducers · Immutability · Pure Functions · State Shape Design
+> Total: 60 Questions | Easy: 20 · Medium: 25 · Hard: 15
+
+---
+
+## 📑 Table of Contents
+
+| Section | Topic | Questions |
+|---------|-------|-----------|
+| [A](#a-store--setup) | Store & Setup | Q1–Q10 |
+| [B](#b-actions--action-creators) | Actions & Action Creators | Q11–Q20 |
+| [C](#c-reducers--pure-functions) | Reducers & Pure Functions | Q21–Q32 |
+| [D](#d-dispatch--data-flow) | Dispatch & Data Flow | Q33–Q40 |
+| [E](#e-combinereducers) | combineReducers | Q41–Q48 |
+| [F](#f-immutability) | Immutability | Q49–Q54 |
+| [G](#g-state-shape-design) | State Shape Design | Q55–Q60 |
+
+---
+
+## A. Store & Setup
+
+---
+
+### Q1 🟢 Easy
+**What is the Redux store and what are its three core responsibilities?**
+
+**Answer:**
+The Redux store is a single JavaScript object that holds the entire application state tree. Its three responsibilities are:
+1. **Holds state** — `store.getState()` returns the current state
+2. **Allows updates** — `store.dispatch(action)` is the only way to trigger state changes
+3. **Notifies listeners** — `store.subscribe(listener)` registers callbacks that run after every dispatch
+
+```typescript
+import { createStore } from 'redux';
+import rootReducer from './reducers';
+
+const store = createStore(rootReducer);
+
+// 1. Read state
+console.log(store.getState());
+
+// 2. Dispatch an action
+store.dispatch({ type: 'INCREMENT' });
+
+// 3. Subscribe to changes
+const unsubscribe = store.subscribe(() => {
+  console.log('State updated:', store.getState());
+});
+
+// Cleanup
+unsubscribe();
+```
+
+---
+
+### Q2 🟢 Easy
+**What is the single source of truth principle in Redux?**
+
+**Answer:**
+The entire application state lives in one single store object. This means:
+- There is **no local component state split across files** for shared data
+- Debugging is easier — you can log/inspect the whole app state at any point
+- Time-travel debugging (Redux DevTools) is possible because state is centralized
+
+```typescript
+// ✅ Entire app state in one place
+const state = store.getState();
+/*
+{
+  auth: { user: null, token: null },
+  employees: { list: [], loading: false },
+  attendance: { records: [], selectedDate: null },
+  ui: { theme: 'light', sidebarOpen: false }
+}
+*/
+
+// ❌ Anti-pattern — don't split shared state across components
+// Component A: useState([]) for employee list
+// Component B: useState([]) for the same employee list
+```
+
+---
+
+### Q3 🟢 Easy
+**How do you create a Redux store? What is the signature of `createStore`?**
+
+**Answer:**
+`createStore(reducer, [preloadedState], [enhancer])` takes:
+- `reducer` — the root reducer function (required)
+- `preloadedState` — initial state to hydrate from (e.g. AsyncStorage)
+- `enhancer` — middleware/devtools enhancer (optional)
+
+```typescript
+import { createStore, applyMiddleware, compose } from 'redux';
+import createSagaMiddleware from 'redux-saga';
+import rootReducer from './rootReducer';
+import rootSaga from './rootSaga';
+
+const sagaMiddleware = createSagaMiddleware();
+
+// With middleware + DevTools
+const composeEnhancers =
+  (window as any).__REDUX_DEVTOOLS_EXTENSION_COMPOSE__ || compose;
+
+const store = createStore(
+  rootReducer,
+  composeEnhancers(applyMiddleware(sagaMiddleware))
+);
+
+sagaMiddleware.run(rootSaga);
+
+export type RootState = ReturnType<typeof store.getState>;
+export type AppDispatch = typeof store.dispatch;
+export default store;
+```
+
+---
+
+### Q4 🟢 Easy
+**How do you connect a Redux store to a React Native app?**
+
+**Answer:**
+Wrap the root component with `<Provider store={store}>`. The Provider uses React Context internally to make the store available to all nested components via `useSelector` and `useDispatch`.
+
+```tsx
+// App.tsx
+import React from 'react';
+import { Provider } from 'react-redux';
+import store from './store';
+import AppNavigator from './navigation/AppNavigator';
+
+const App = () => {
+  return (
+    <Provider store={store}>
+      <AppNavigator />
+    </Provider>
+  );
+};
+
+export default App;
+```
+
+```tsx
+// Any child component
+import { useSelector, useDispatch } from 'react-redux';
+import { RootState } from '../store';
+
+const Dashboard = () => {
+  const user = useSelector((state: RootState) => state.auth.user);
+  const dispatch = useDispatch();
+
+  return <Text>Welcome {user?.name}</Text>;
+};
+```
+
+---
+
+### Q5 🟢 Easy
+**What does `store.getState()` return and when should you avoid calling it directly in components?**
+
+**Answer:**
+`store.getState()` returns the current state snapshot. You should avoid calling it directly in components because:
+- It **does not trigger re-renders** when state changes
+- It bypasses React's rendering cycle
+- Use `useSelector` instead — it subscribes to the store and re-renders on relevant state changes
+
+```typescript
+// ❌ Wrong — component won't re-render on state change
+const MyComponent = () => {
+  const user = store.getState().auth.user; // stale after first render
+  return <Text>{user?.name}</Text>;
+};
+
+// ✅ Correct — re-renders when auth.user changes
+const MyComponent = () => {
+  const user = useSelector((state: RootState) => state.auth.user);
+  return <Text>{user?.name}</Text>;
+};
+
+// ✅ store.getState() is fine OUTSIDE components
+// e.g., in sagas, utility functions, API interceptors
+const token = store.getState().auth.token;
+```
+
+---
+
+### Q6 🟡 Medium
+**What is `applyMiddleware` and how does it enhance the store?**
+
+**Answer:**
+`applyMiddleware` is a store enhancer that wraps `store.dispatch` to add custom behaviour — like logging, async operations, crash reporting, or routing. Each middleware has access to `getState` and `dispatch` and calls `next(action)` to pass the action down the chain.
+
+```typescript
+// Custom logger middleware
+const loggerMiddleware = (store: any) => (next: any) => (action: any) => {
+  console.group(action.type);
+  console.log('Prev State:', store.getState());
+  console.log('Action:', action);
+  const result = next(action); // Pass to next middleware / reducer
+  console.log('Next State:', store.getState());
+  console.groupEnd();
+  return result;
+};
+
+// Middleware chain: dispatch → logger → sagaMiddleware → reducer
+const store = createStore(
+  rootReducer,
+  applyMiddleware(loggerMiddleware, sagaMiddleware)
+);
+```
+
+---
+
+### Q7 🟡 Medium
+**What is the difference between `createStore` (Redux core) and `configureStore` (Redux Toolkit)?**
+
+**Answer:**
+| Feature | `createStore` | `configureStore` (RTK) |
+|---------|--------------|----------------------|
+| Setup | Manual enhancer composition | Auto-configured |
+| DevTools | Manual setup | Enabled by default |
+| Immer | Not included | Built-in (immutable updates) |
+| Thunk | Must add manually | Pre-installed |
+| Boilerplate | High | Minimal |
+
+```typescript
+// Old way — createStore
+const store = createStore(
+  rootReducer,
+  composeWithDevTools(applyMiddleware(thunk, sagaMiddleware))
+);
+
+// Modern way — configureStore (RTK)
+import { configureStore } from '@reduxjs/toolkit';
+
+const store = configureStore({
+  reducer: rootReducer,
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware().concat(sagaMiddleware),
+  devTools: process.env.NODE_ENV !== 'production',
+});
+```
+
+---
+
+### Q8 🟡 Medium
+**How do you preload/hydrate Redux store from AsyncStorage in React Native?**
+
+**Answer:**
+Pass `preloadedState` as the second argument to `createStore`. Fetch data from AsyncStorage first, then initialize the store with it.
+
+```typescript
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { createStore, applyMiddleware } from 'redux';
+import rootReducer from './rootReducer';
+
+const loadState = async () => {
+  try {
+    const serialized = await AsyncStorage.getItem('reduxState');
+    return serialized ? JSON.parse(serialized) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const saveState = (state: any) => {
+  AsyncStorage.setItem('reduxState', JSON.stringify(state));
+};
+
+// In your app entry point:
+const initStore = async () => {
+  const preloadedState = await loadState();
+  const store = createStore(rootReducer, preloadedState, applyMiddleware(sagaMiddleware));
+
+  // Persist on every change (debounce in production)
+  store.subscribe(() => saveState(store.getState()));
+
+  return store;
+};
+```
+
+---
+
+### Q9 🟡 Medium
+**What is Redux DevTools and how does it help during development?**
+
+**Answer:**
+Redux DevTools is a browser/RN debugger extension that lets you:
+- **Inspect** every action dispatched and the resulting state diff
+- **Time-travel** — replay or rewind state changes
+- **Import/export** state for bug reproduction
+- **Skip actions** to isolate bugs
+
+```typescript
+import { createStore, applyMiddleware, compose } from 'redux';
+
+// Enable DevTools only in development
+const composeEnhancers =
+  process.env.NODE_ENV === 'development' &&
+  (global as any).__REDUX_DEVTOOLS_EXTENSION_COMPOSE__
+    ? (global as any).__REDUX_DEVTOOLS_EXTENSION_COMPOSE__
+    : compose;
+
+const store = createStore(
+  rootReducer,
+  composeEnhancers(applyMiddleware(sagaMiddleware))
+);
+
+// For React Native — use Flipper + redux-flipper plugin
+// npm install redux-flipper
+import { createFlipperMiddleware } from 'redux-flipper';
+const flipperMiddleware = createFlipperMiddleware();
+
+const store = createStore(
+  rootReducer,
+  applyMiddleware(sagaMiddleware, flipperMiddleware)
+);
+```
+
+---
+
+### Q10 🔴 Hard
+**Explain the full Redux data flow with a real ERP example. What happens from button press to UI update?**
+
+**Answer:**
+Redux follows a strict **unidirectional data flow**: Action → Reducer → Store → View
+
+Step-by-step for "Load Employee List" in an ERP app:
+1. User navigates to Employees screen
+2. Component dispatches `FETCH_EMPLOYEES_REQUEST`
+3. Saga intercepts, calls API
+4. On success, dispatches `FETCH_EMPLOYEES_SUCCESS` with payload
+5. Reducer updates `employees.list` in state
+6. `useSelector` in component detects change, triggers re-render
+7. FlatList displays updated employee list
+
+```typescript
+// 1. Action Types
+const FETCH_EMPLOYEES_REQUEST = 'FETCH_EMPLOYEES_REQUEST';
+const FETCH_EMPLOYEES_SUCCESS = 'FETCH_EMPLOYEES_SUCCESS';
+const FETCH_EMPLOYEES_FAILURE = 'FETCH_EMPLOYEES_FAILURE';
+
+// 2. Component dispatches action
+const EmployeeScreen = () => {
+  const dispatch = useDispatch();
+  const { list, loading, error } = useSelector((s: RootState) => s.employees);
+
+  useEffect(() => {
+    dispatch({ type: FETCH_EMPLOYEES_REQUEST });
+  }, []);
+
+  if (loading) return <ActivityIndicator />;
+  return <FlatList data={list} renderItem={({ item }) => <Text>{item.name}</Text>} />;
+};
+
+// 3. Saga intercepts (Part 02 topic, shown for flow context)
+function* fetchEmployeesSaga() {
+  try {
+    const data: Employee[] = yield call(api.getEmployees);
+    yield put({ type: FETCH_EMPLOYEES_SUCCESS, payload: data });
+  } catch (e: any) {
+    yield put({ type: FETCH_EMPLOYEES_FAILURE, payload: e.message });
+  }
+}
+
+// 4. Reducer updates state
+const employeesReducer = (state = initialState, action: AnyAction) => {
+  switch (action.type) {
+    case FETCH_EMPLOYEES_REQUEST:
+      return { ...state, loading: true, error: null };
+    case FETCH_EMPLOYEES_SUCCESS:
+      return { ...state, loading: false, list: action.payload };
+    case FETCH_EMPLOYEES_FAILURE:
+      return { ...state, loading: false, error: action.payload };
+    default:
+      return state;
+  }
+};
+```
+
+---
+
+## B. Actions & Action Creators
+
+---
+
+### Q11 🟢 Easy
+**What is a Redux action? What are the required and optional fields?**
+
+**Answer:**
+An action is a plain JavaScript object that describes **what happened**. The only required field is `type` (a string constant). An optional `payload` carries data; `error: true` flags error actions; `meta` carries extra info.
+
+```typescript
+// Minimal action
+{ type: 'INCREMENT' }
+
+// With payload (FSA — Flux Standard Action convention)
+{ type: 'ADD_EMPLOYEE', payload: { id: '1', name: 'Devesh', dept: 'Engineering' } }
+
+// Error action
+{ type: 'FETCH_FAILED', payload: new Error('Network Error'), error: true }
+
+// With meta
+{ type: 'LOG_EVENT', payload: { screen: 'Dashboard' }, meta: { timestamp: Date.now() } }
+
+// TypeScript typed action
+interface AddEmployeeAction {
+  type: 'ADD_EMPLOYEE';
+  payload: {
+    id: string;
+    name: string;
+    dept: string;
+  };
+}
+```
+
+---
+
+### Q12 🟢 Easy
+**What is an action creator and why use one instead of dispatching plain objects?**
+
+**Answer:**
+An action creator is a function that returns an action object. Benefits:
+- **Reusable** — define once, call everywhere
+- **Type-safe** — TypeScript can infer payload shape
+- **Testable** — easy to unit test in isolation
+- **Less typo-prone** — action type string is defined once
+
+```typescript
+// ❌ Inline — type string can be mistyped anywhere
+dispatch({ type: 'FETCH_EMPLOYYEES_REQUEST' }); // bug: typo
+
+// ✅ Action creator + constant
+const FETCH_EMPLOYEES_REQUEST = 'FETCH_EMPLOYEES_REQUEST' as const;
+
+const fetchEmployeesRequest = () => ({
+  type: FETCH_EMPLOYEES_REQUEST,
+});
+
+const addEmployee = (employee: Employee) => ({
+  type: 'ADD_EMPLOYEE' as const,
+  payload: employee,
+});
+
+// Dispatch
+dispatch(fetchEmployeesRequest());
+dispatch(addEmployee({ id: '2', name: 'Rahul', dept: 'HR' }));
+```
+
+---
+
+### Q13 🟢 Easy
+**What is the Flux Standard Action (FSA) convention?**
+
+**Answer:**
+FSA is a community convention for action structure:
+- `type` — string, required
+- `payload` — any value, optional. If `error` is true, payload should be an Error object
+- `error` — boolean, optional. `true` signals a failure action
+- `meta` — any extra info not part of payload (timestamps, request IDs)
+- **No other top-level keys allowed**
+
+```typescript
+// ✅ FSA-compliant actions
+const successAction = {
+  type: 'FETCH_PAYROLL_SUCCESS',
+  payload: { employees: [], totalAmount: 50000 },
+};
+
+const errorAction = {
+  type: 'FETCH_PAYROLL_FAILURE',
+  payload: new Error('Server Error'),
+  error: true,
+};
+
+const metaAction = {
+  type: 'TRACK_SCREEN_VIEW',
+  payload: { screen: 'Attendance' },
+  meta: { timestamp: Date.now(), userId: 'u123' },
+};
+
+// ❌ Non-FSA — avoid custom top-level keys
+const badAction = {
+  type: 'FETCH_DONE',
+  data: [],        // ❌ should be payload
+  isError: false,  // ❌ should be error
+};
+```
+
+---
+
+### Q14 🟢 Easy
+**How do you define action types in TypeScript to get full type safety?**
+
+**Answer:**
+Use `as const` assertions or string literal union types to make action types narrowly typed. This enables TypeScript to discriminate between action types in switch statements.
+
+```typescript
+// Method 1: as const on string
+const INCREMENT = 'INCREMENT' as const;
+const DECREMENT = 'DECREMENT' as const;
+
+// Method 2: enum (avoid — poor tree shaking)
+enum ActionTypes { INCREMENT = 'INCREMENT' }
+
+// Method 3: Union type with interfaces (recommended)
+interface IncrementAction { type: 'INCREMENT' }
+interface DecrementAction { type: 'DECREMENT'; payload: number }
+interface ResetAction    { type: 'RESET' }
+
+type CounterAction = IncrementAction | DecrementAction | ResetAction;
+
+// In reducer — TypeScript knows payload exists only for DECREMENT
+const reducer = (state = 0, action: CounterAction): number => {
+  switch (action.type) {
+    case 'INCREMENT': return state + 1;
+    case 'DECREMENT': return state - action.payload; // ✅ TS knows payload: number
+    case 'RESET':     return 0;
+    default:          return state;
+  }
+};
+```
+
+---
+
+### Q15 🟢 Easy
+**What is the difference between synchronous and asynchronous actions in Redux?**
+
+**Answer:**
+- **Synchronous actions** — plain objects, handled directly by reducers
+- **Asynchronous actions** — functions (thunks) or effects (sagas) that perform async work then dispatch sync actions
+
+```typescript
+// Synchronous action — reducer handles immediately
+const setUser = (user: User) => ({ type: 'SET_USER' as const, payload: user });
+
+// Asynchronous — Thunk (returns a function)
+const loginThunk = (credentials: Credentials) =>
+  async (dispatch: AppDispatch) => {
+    dispatch({ type: 'LOGIN_REQUEST' });
+    try {
+      const user = await authApi.login(credentials);
+      dispatch({ type: 'LOGIN_SUCCESS', payload: user });
+    } catch (e: any) {
+      dispatch({ type: 'LOGIN_FAILURE', payload: e.message });
+    }
+  };
+
+// Asynchronous — Saga (watcher/worker pattern, Part 02)
+// dispatch({ type: 'LOGIN_REQUEST', payload: credentials })
+// → saga intercepts → calls API → dispatches LOGIN_SUCCESS/FAILURE
+```
+
+---
+
+### Q16 🟡 Medium
+**Why should action type strings be unique across the entire app? How do you enforce this in large apps?**
+
+**Answer:**
+If two reducers have the same action type string, both will respond to the same dispatch — often causing unexpected state changes. In large apps enforce uniqueness with:
+1. **Namespace prefixes** — `auth/LOGIN_REQUEST`, `employee/FETCH_REQUEST`
+2. **Feature-based modules** — each module owns its type strings
+3. **Redux Toolkit** — auto-namespaces via `createSlice`
+
+```typescript
+// ❌ Naming collision
+// auth/reducer.ts
+const FETCH_REQUEST = 'FETCH_REQUEST'; // same string!
+// employee/reducer.ts
+const FETCH_REQUEST = 'FETCH_REQUEST'; // both respond to same dispatch!
+
+// ✅ Namespaced constants
+// auth/actionTypes.ts
+export const AUTH_FETCH_REQUEST   = 'auth/FETCH_REQUEST';
+export const AUTH_FETCH_SUCCESS   = 'auth/FETCH_SUCCESS';
+export const AUTH_FETCH_FAILURE   = 'auth/FETCH_FAILURE';
+
+// employee/actionTypes.ts
+export const EMPLOYEE_FETCH_REQUEST = 'employee/FETCH_REQUEST';
+export const EMPLOYEE_FETCH_SUCCESS = 'employee/FETCH_SUCCESS';
+
+// RTK auto-namespaces (createSlice)
+const authSlice = createSlice({
+  name: 'auth',
+  // generates 'auth/loginRequest', 'auth/loginSuccess' automatically
+});
+```
+
+---
+
+### Q17 🟡 Medium
+**What is a "bound action creator"? How do you use `bindActionCreators`?**
+
+**Answer:**
+A bound action creator automatically calls `dispatch` — so you call `add()` instead of `dispatch(add())`. `bindActionCreators` wraps each action creator with dispatch.
+
+```typescript
+import { bindActionCreators } from 'redux';
+import { useDispatch } from 'react-redux';
+import * as employeeActions from '../store/employee/actions';
+
+// Manual binding
+const BoundExample = () => {
+  const dispatch = useDispatch();
+
+  // Without binding
+  const handleAdd = (emp: Employee) => dispatch(employeeActions.addEmployee(emp));
+
+  // With bindActionCreators
+  const actions = bindActionCreators(employeeActions, dispatch);
+
+  // Now call directly
+  const handleFetch = () => actions.fetchEmployees();
+  const handleDelete = (id: string) => actions.deleteEmployee(id);
+
+  return <Button title="Fetch" onPress={handleFetch} />;
+};
+
+// Note: In modern React-Redux with hooks, bindActionCreators
+// is rarely needed — useDispatch + direct calls is cleaner
+```
+
+---
+
+### Q18 🟡 Medium
+**How would you handle multiple async states (idle, loading, success, error) for an action?**
+
+**Answer:**
+Use a status enum in state to represent all four async states. This is cleaner than multiple booleans (`isLoading`, `isError`, `isSuccess`).
+
+```typescript
+// Status type
+type AsyncStatus = 'idle' | 'loading' | 'succeeded' | 'failed';
+
+interface EmployeeState {
+  list: Employee[];
+  status: AsyncStatus;
+  error: string | null;
+}
+
+const initialState: EmployeeState = {
+  list: [],
+  status: 'idle',
+  error: null,
+};
+
+const employeeReducer = (state = initialState, action: AnyAction): EmployeeState => {
+  switch (action.type) {
+    case 'FETCH_EMPLOYEES_REQUEST':
+      return { ...state, status: 'loading', error: null };
+    case 'FETCH_EMPLOYEES_SUCCESS':
+      return { ...state, status: 'succeeded', list: action.payload };
+    case 'FETCH_EMPLOYEES_FAILURE':
+      return { ...state, status: 'failed', error: action.payload };
+    default:
+      return state;
+  }
+};
+
+// Component usage
+const EmployeeScreen = () => {
+  const { list, status, error } = useSelector((s: RootState) => s.employees);
+
+  if (status === 'idle')      return <Button title="Load" onPress={() => dispatch(fetchEmployees())} />;
+  if (status === 'loading')   return <ActivityIndicator />;
+  if (status === 'failed')    return <Text>Error: {error}</Text>;
+  return <FlatList data={list} />;
+};
+```
+
+---
+
+### Q19 🟡 Medium
+**What is action batching and why does it matter for React Native performance?**
+
+**Answer:**
+Action batching means grouping multiple dispatches so React only re-renders once. By default in React 18+, updates inside event handlers are batched. For async operations (sagas, timeouts), manual batching may be needed.
+
+```typescript
+import { batch } from 'react-redux';
+
+// Without batching — 3 re-renders
+dispatch({ type: 'SET_USER', payload: user });
+dispatch({ type: 'SET_TOKEN', payload: token });
+dispatch({ type: 'SET_LOADING', payload: false });
+
+// With batch — 1 re-render
+batch(() => {
+  dispatch({ type: 'SET_USER', payload: user });
+  dispatch({ type: 'SET_TOKEN', payload: token });
+  dispatch({ type: 'SET_LOADING', payload: false });
+});
+
+// In Redux-Saga — use channels or dispatch a single combined action
+// instead of multiple puts when possible
+function* loginSaga(action: LoginAction) {
+  const { user, token } = yield call(api.login, action.payload);
+
+  // One dispatch = one re-render
+  yield put({
+    type: 'LOGIN_COMPLETE',
+    payload: { user, token, loading: false }
+  });
+}
+```
+
+---
+
+### Q20 🔴 Hard
+**Design a complete action architecture for a Fintech app (like Debt Relief India). How do you handle KYC, payment, and loan state actions without conflicts?**
+
+**Answer:**
+Use feature-based namespacing with a centralized action types registry. Group related actions into domain modules.
+
+```typescript
+// store/actionTypes.ts — central registry
+export const ActionTypes = {
+  // KYC Module
+  KYC: {
+    INIT:           'kyc/INIT',
+    UPLOAD_DOC:     'kyc/UPLOAD_DOC',
+    UPLOAD_SUCCESS: 'kyc/UPLOAD_SUCCESS',
+    UPLOAD_FAILURE: 'kyc/UPLOAD_FAILURE',
+    VERIFY:         'kyc/VERIFY',
+    VERIFIED:       'kyc/VERIFIED',
+  },
+  // Payment Module
+  PAYMENT: {
+    INITIATE:       'payment/INITIATE',
+    RAZORPAY_OPEN:  'payment/RAZORPAY_OPEN',
+    SUCCESS:        'payment/SUCCESS',
+    FAILURE:        'payment/FAILURE',
+    REFUND_REQUEST: 'payment/REFUND_REQUEST',
+  },
+  // Loan Module
+  LOAN: {
+    FETCH:          'loan/FETCH',
+    FETCH_SUCCESS:  'loan/FETCH_SUCCESS',
+    EMI_CALCULATE:  'loan/EMI_CALCULATE',
+    REPAYMENT_DUE:  'loan/REPAYMENT_DUE',
+    CLOSE:          'loan/CLOSE',
+  },
+} as const;
+
+// Action creators — strongly typed
+interface PaymentInitiateAction {
+  type: typeof ActionTypes.PAYMENT.INITIATE;
+  payload: { amount: number; loanId: string; method: 'upi' | 'card' };
+}
+
+const initiatePayment = (
+  amount: number, loanId: string, method: 'upi' | 'card'
+): PaymentInitiateAction => ({
+  type: ActionTypes.PAYMENT.INITIATE,
+  payload: { amount, loanId, method },
+});
+
+// Safe dispatch — no type string conflicts across modules
+dispatch(initiatePayment(5000, 'loan_001', 'upi'));
+```
+
+---
+
+## C. Reducers & Pure Functions
+
+---
+
+### Q21 🟢 Easy
+**What is a reducer? What are the rules it must follow?**
+
+**Answer:**
+A reducer is a pure function `(state, action) => newState` that describes how state changes in response to an action. Rules:
+1. **Pure** — no side effects, no API calls, no random values
+2. **Immutable** — never mutate state directly, return new objects
+3. **Deterministic** — same inputs always produce same output
+4. **Handle default** — always return current state for unknown actions
+5. **Initialize state** — provide default value for state parameter
+
+```typescript
+interface CounterState { count: number }
+
+const initialState: CounterState = { count: 0 };
+
+const counterReducer = (
+  state: CounterState = initialState,
+  action: AnyAction
+): CounterState => {
+  switch (action.type) {
+    case 'INCREMENT':
+      return { ...state, count: state.count + 1 }; // ✅ new object
+
+    case 'DECREMENT':
+      return { ...state, count: state.count - 1 };
+
+    case 'RESET':
+      return initialState;
+
+    default:
+      return state; // ✅ always return state for unknown actions
+  }
+};
+
+// ❌ Violations
+const badReducer = (state = initialState, action: AnyAction) => {
+  state.count++;             // ❌ mutating state
+  fetch('/api/log');         // ❌ side effect
+  return Math.random() > 0.5 // ❌ non-deterministic
+    ? state
+    : initialState;
+};
+```
+
+---
+
+### Q22 🟢 Easy
+**What is a pure function? Give an example of a pure vs impure reducer.**
+
+**Answer:**
+A pure function: given the same inputs, always returns the same output, and has no side effects (no mutations, no I/O, no randomness).
+
+```typescript
+// ✅ Pure reducer
+const pureReducer = (state = { count: 0 }, action: AnyAction) => {
+  switch (action.type) {
+    case 'ADD':
+      return { count: state.count + action.payload }; // same inputs → same output
+    default:
+      return state;
+  }
+};
+
+// ❌ Impure — mutation
+const impure1 = (state = { items: [] }, action: AnyAction) => {
+  if (action.type === 'ADD_ITEM') {
+    state.items.push(action.payload); // ❌ mutates original array
+    return state;                     // ❌ returns same reference
+  }
+  return state;
+};
+
+// ❌ Impure — side effect
+const impure2 = (state = {}, action: AnyAction) => {
+  if (action.type === 'SAVE') {
+    localStorage.setItem('key', JSON.stringify(state)); // ❌ side effect
+  }
+  return state;
+};
+
+// ❌ Impure — non-deterministic
+const impure3 = (state = { id: '' }, action: AnyAction) => {
+  if (action.type === 'CREATE') {
+    return { id: Math.random().toString() }; // ❌ different result each time
+  }
+  return state;
+};
+```
+
+---
+
+### Q23 🟢 Easy
+**Why must reducers return the existing state for unrecognized actions?**
+
+**Answer:**
+When an app initializes, Redux dispatches an internal `@@INIT` action to populate the store. If a reducer doesn't return `state` for unknown actions, it returns `undefined`, breaking the entire state tree. Also, third-party libraries may dispatch their own actions — reducers must silently ignore them.
+
+```typescript
+// ❌ Bug — returns undefined for @@INIT and unknown actions
+const brokenReducer = (state = { count: 0 }, action: AnyAction) => {
+  if (action.type === 'INCREMENT') {
+    return { count: state.count + 1 };
+  }
+  // Returns undefined for all other actions including @@redux/INIT
+};
+
+// ✅ Correct — always return state
+const correctReducer = (state = { count: 0 }, action: AnyAction) => {
+  switch (action.type) {
+    case 'INCREMENT': return { count: state.count + 1 };
+    default:          return state; // ✅ handles @@INIT, unknown actions
+  }
+};
+```
+
+---
+
+### Q24 🟢 Easy
+**How do you handle arrays in a reducer without mutation?**
+
+**Answer:**
+Use spread operator, `map`, `filter`, and `concat` — these return new arrays. Never use `push`, `pop`, `splice`, or direct index assignment.
+
+```typescript
+interface Item { id: string; name: string }
+interface ListState { items: Item[] }
+
+const listReducer = (state: ListState = { items: [] }, action: AnyAction): ListState => {
+  switch (action.type) {
+
+    case 'ADD_ITEM':
+      return { ...state, items: [...state.items, action.payload] }; // ✅
+
+    case 'REMOVE_ITEM':
+      return {
+        ...state,
+        items: state.items.filter(item => item.id !== action.payload),
+      };
+
+    case 'UPDATE_ITEM':
+      return {
+        ...state,
+        items: state.items.map(item =>
+          item.id === action.payload.id ? { ...item, ...action.payload } : item
+        ),
+      };
+
+    default:
+      return state;
+  }
+};
+
+// ❌ Never do this
+case 'ADD_ITEM':
+  state.items.push(action.payload); // ❌ mutation!
+  return state;
+```
+
+---
+
+### Q25 🟢 Easy
+**How do you handle nested objects in a reducer without mutation?**
+
+**Answer:**
+Spread each level of nesting that changes. For deeply nested state, consider `immer` (used internally by RTK).
+
+```typescript
+interface UserProfile {
+  id: string;
+  personal: { name: string; email: string };
+  address: { city: string; pincode: string };
+}
+
+const profileReducer = (
+  state: UserProfile = initialProfile,
+  action: AnyAction
+): UserProfile => {
+  switch (action.type) {
+
+    case 'UPDATE_EMAIL':
+      return {
+        ...state,
+        personal: {
+          ...state.personal,          // ✅ spread nested level
+          email: action.payload,
+        },
+      };
+
+    case 'UPDATE_CITY':
+      return {
+        ...state,
+        address: {
+          ...state.address,
+          city: action.payload,
+        },
+      };
+
+    default:
+      return state;
+  }
+};
+
+// ✅ With immer (cleaner for deep nesting)
+import produce from 'immer';
+
+const profileReducerImmer = produce((draft, action) => {
+  if (action.type === 'UPDATE_EMAIL') {
+    draft.personal.email = action.payload; // looks like mutation, but isn't
+  }
+}, initialProfile);
+```
+
+---
+
+### Q26 🟡 Medium
+**What is reducer composition and why is it important for scalable apps?**
+
+**Answer:**
+Reducer composition means splitting the root reducer into smaller, focused reducers — each managing its own slice of state. This keeps reducers small, testable, and independently maintainable.
+
+```typescript
+// auth reducer — only manages auth slice
+const authReducer = (state = authInitial, action: AnyAction) => {
+  switch (action.type) {
+    case 'LOGIN_SUCCESS': return { ...state, user: action.payload };
+    case 'LOGOUT':        return authInitial;
+    default:              return state;
+  }
+};
+
+// employee reducer — only manages employee slice
+const employeeReducer = (state = empInitial, action: AnyAction) => {
+  switch (action.type) {
+    case 'FETCH_EMPLOYEES_SUCCESS': return { ...state, list: action.payload };
+    default:                        return state;
+  }
+};
+
+// Root reducer — composed from slices
+const rootReducer = combineReducers({
+  auth:      authReducer,
+  employees: employeeReducer,
+  // Each key maps to state.auth, state.employees, etc.
+});
+
+// state shape output:
+// { auth: { user, token }, employees: { list, loading } }
+```
+
+---
+
+### Q27 🟡 Medium
+**How do you reset the entire Redux state on logout?**
+
+**Answer:**
+Wrap the root reducer and return `undefined` state when a LOGOUT action is dispatched. Each sub-reducer will then re-initialize to its `initialState`.
+
+```typescript
+import { combineReducers, AnyAction } from 'redux';
+
+const appReducer = combineReducers({
+  auth:      authReducer,
+  employees: employeeReducer,
+  payroll:   payrollReducer,
+  ui:        uiReducer,
+});
+
+// Root reducer wrapper
+const rootReducer = (state: ReturnType<typeof appReducer> | undefined, action: AnyAction) => {
+  if (action.type === 'LOGOUT') {
+    // Pass undefined → each slice returns its initialState
+    state = undefined;
+  }
+  return appReducer(state, action);
+};
+
+// Optionally preserve some state after logout (e.g. ui preferences)
+const rootReducerWithPersist = (
+  state: ReturnType<typeof appReducer> | undefined,
+  action: AnyAction
+) => {
+  if (action.type === 'LOGOUT') {
+    const { ui } = state!; // preserve ui settings
+    state = { ui } as any;
+  }
+  return appReducer(state, action);
+};
+```
+
+---
+
+### Q28 🟡 Medium
+**How do you handle multiple items in state using a map/dictionary pattern instead of an array?**
+
+**Answer:**
+For large lists (employees, products), use a normalized map `{ byId: {}, allIds: [] }` instead of a plain array. O(1) lookups vs O(n) array searches.
+
+```typescript
+interface Employee { id: string; name: string; dept: string }
+
+interface NormalizedState {
+  byId: Record<string, Employee>;
+  allIds: string[];
+  loading: boolean;
+}
+
+const initial: NormalizedState = { byId: {}, allIds: [], loading: false };
+
+const employeeReducer = (state = initial, action: AnyAction): NormalizedState => {
+  switch (action.type) {
+
+    case 'FETCH_EMPLOYEES_SUCCESS': {
+      const byId: Record<string, Employee> = {};
+      const allIds: string[] = [];
+      (action.payload as Employee[]).forEach(emp => {
+        byId[emp.id] = emp;
+        allIds.push(emp.id);
+      });
+      return { ...state, byId, allIds, loading: false };
+    }
+
+    case 'UPDATE_EMPLOYEE':
+      return {
+        ...state,
+        byId: {
+          ...state.byId,
+          [action.payload.id]: { ...state.byId[action.payload.id], ...action.payload },
+        },
+      };
+
+    case 'DELETE_EMPLOYEE': {
+      const { [action.payload]: removed, ...rest } = state.byId;
+      return {
+        ...state,
+        byId: rest,
+        allIds: state.allIds.filter(id => id !== action.payload),
+      };
+    }
+
+    default:
+      return state;
+  }
+};
+
+// O(1) lookup by id — no .find() needed
+const emp = state.employees.byId['emp_001'];
+```
+
+---
+
+### Q29 🟡 Medium
+**How do you write unit tests for a reducer?**
+
+**Answer:**
+Reducers are pure functions — easy to test. Pass a state + action, assert the output. No mocking needed.
+
+```typescript
+import { employeeReducer } from '../employee/reducer';
+import { initialState } from '../employee/initialState';
+
+describe('employeeReducer', () => {
+
+  it('returns initialState for unknown actions', () => {
+    expect(employeeReducer(undefined, { type: '@@INIT' })).toEqual(initialState);
+  });
+
+  it('sets loading true on FETCH_REQUEST', () => {
+    const state = employeeReducer(initialState, { type: 'FETCH_EMPLOYEES_REQUEST' });
+    expect(state.loading).toBe(true);
+    expect(state.error).toBeNull();
+  });
+
+  it('populates list on FETCH_SUCCESS', () => {
+    const employees = [{ id: '1', name: 'Devesh', dept: 'Eng' }];
+    const state = employeeReducer(initialState, {
+      type: 'FETCH_EMPLOYEES_SUCCESS',
+      payload: employees,
+    });
+    expect(state.list).toEqual(employees);
+    expect(state.loading).toBe(false);
+  });
+
+  it('does not mutate original state', () => {
+    const frozen = Object.freeze({ ...initialState });
+    expect(() => employeeReducer(frozen, { type: 'FETCH_EMPLOYEES_REQUEST' })).not.toThrow();
+  });
+});
+```
+
+---
+
+### Q30 🟡 Medium
+**What happens if a reducer throws an error? How do you handle it?**
+
+**Answer:**
+If a reducer throws, Redux propagates the error and the dispatch call throws — potentially crashing the app. Wrap reducers in try-catch for resilience, or use error boundaries + logging.
+
+```typescript
+// Safe reducer wrapper
+const safeReducer = <S>(
+  reducer: (state: S | undefined, action: AnyAction) => S,
+  fallback: S
+) => (state: S | undefined, action: AnyAction): S => {
+  try {
+    return reducer(state, action);
+  } catch (e) {
+    console.error('Reducer error:', e, '\nAction:', action);
+    // Report to Crashlytics / Sentry
+    crashlytics().recordError(e as Error);
+    return state ?? fallback; // ✅ return last known good state
+  }
+};
+
+const safeEmployeeReducer = safeReducer(employeeReducer, initialState);
+
+const rootReducer = combineReducers({
+  employees: safeEmployeeReducer,
+  // ...
+});
+```
+
+---
+
+### Q31 🔴 Hard
+**How does Redux know which reducer to call when an action is dispatched?**
+
+**Answer:**
+When you dispatch an action, Redux calls the **root reducer** with the current state and action. `combineReducers` then calls **every** sub-reducer, passing each its own state slice. Each reducer checks `action.type` and either handles it (returns new state) or returns the current state unchanged.
+
+```typescript
+// This is what combineReducers does internally (simplified):
+function myCombineReducers(reducers: Record<string, Reducer>) {
+  return function rootReducer(state: any = {}, action: AnyAction) {
+    let hasChanged = false;
+    const nextState: any = {};
+
+    Object.keys(reducers).forEach(key => {
+      const reducer = reducers[key];
+      const previousStateForKey = state[key];
+      const nextStateForKey = reducer(previousStateForKey, action);
+
+      nextState[key] = nextStateForKey;
+      hasChanged = hasChanged || nextStateForKey !== previousStateForKey;
+    });
+
+    // If nothing changed, return same reference (no re-render)
+    return hasChanged ? nextState : state;
+  };
+}
+
+// All reducers are called for every action dispatch!
+// This is why action types must be unique — multiple reducers
+// could accidentally handle the same action type
+```
+
+---
+
+### Q32 🔴 Hard
+**How do you handle cross-slice state updates — when one action needs to update multiple reducer slices?**
+
+**Answer:**
+**Option 1:** Multiple reducers listen to the same action type (recommended for simple cases).
+**Option 2:** Use a saga that dispatches multiple targeted actions.
+**Option 3:** Use a root-level reducer that handles cross-slice coordination.
+
+```typescript
+// Option 1 — Multiple slices respond to same action
+// auth reducer
+const authReducer = (state = authInit, action: AnyAction) => {
+  switch (action.type) {
+    case 'LOGOUT':
+      return authInit; // clears auth
+    default: return state;
+  }
+};
+
+// cart reducer — also responds to LOGOUT
+const cartReducer = (state = cartInit, action: AnyAction) => {
+  switch (action.type) {
+    case 'LOGOUT':
+      return cartInit; // clears cart on logout
+    default: return state;
+  }
+};
+
+// Option 2 — Saga dispatches multiple actions
+function* logoutSaga() {
+  yield put({ type: 'auth/CLEAR' });
+  yield put({ type: 'cart/CLEAR' });
+  yield put({ type: 'notifications/CLEAR' });
+  yield call(AsyncStorage.clear);
+}
+
+// Option 3 — Root-level reducer for complex cross-slice logic
+const rootReducer = (state: RootState | undefined, action: AnyAction) => {
+  if (action.type === 'USER_DEACTIVATED') {
+    // Complex cross-slice transformation
+    return {
+      ...appReducer(state, action),
+      auth:     authInit,
+      employee: empInit,
+      audit: { ...state?.audit, deactivatedAt: Date.now() },
+    };
+  }
+  return appReducer(state, action);
+};
+```
+
+---
+
+## D. Dispatch & Data Flow
+
+---
+
+### Q33 🟢 Easy
+**What is `dispatch` and what happens when you call it?**
+
+**Answer:**
+`dispatch(action)` is the only way to trigger a state change in Redux. When called:
+1. The action is sent to the root reducer
+2. The reducer computes new state
+3. Store saves the new state
+4. All subscribers (including `useSelector` hooks) are notified
+5. React re-renders components with changed state
+
+```typescript
+import { useDispatch } from 'react-redux';
+
+const AttendanceButton = () => {
+  const dispatch = useDispatch();
+
+  const handleCheckIn = () => {
+    // Step 1: dispatch sends action to store
+    dispatch({
+      type: 'ATTENDANCE_CHECK_IN',
+      payload: { employeeId: 'emp_001', timestamp: Date.now() },
+    });
+    // Steps 2–5 happen synchronously inside Redux
+  };
+
+  return <Button title="Check In" onPress={handleCheckIn} />;
+};
+```
+
+---
+
+### Q34 🟢 Easy
+**What is the difference between `useDispatch` and accessing `store.dispatch` directly?**
+
+**Answer:**
+| | `useDispatch` | `store.dispatch` |
+|--|--------------|-----------------|
+| Location | Inside React components | Anywhere (sagas, utils, interceptors) |
+| Stable ref | Yes, memoized by React-Redux | Direct reference |
+| Typing | Returns `AppDispatch` when typed correctly | Same |
+| Best for | Component event handlers | Outside React tree |
+
+```typescript
+// ✅ In components — use useDispatch
+const MyComponent = () => {
+  const dispatch = useDispatch<AppDispatch>();
+  return <Button onPress={() => dispatch(fetchEmployees())} title="Load" />;
+};
+
+// ✅ Outside React — use store.dispatch directly
+// In axios interceptor (for token refresh):
+axiosInstance.interceptors.response.use(
+  response => response,
+  error => {
+    if (error.response?.status === 401) {
+      store.dispatch({ type: 'AUTH_TOKEN_EXPIRED' });
+    }
+    return Promise.reject(error);
+  }
+);
+```
+
+---
+
+### Q35 🟢 Easy
+**Can you dispatch multiple actions in sequence? What is the execution order?**
+
+**Answer:**
+Yes. Each `dispatch` call is processed synchronously and sequentially. Reducers run, state updates, and subscribers are notified after each dispatch before the next one begins.
+
+```typescript
+const handleLogin = async () => {
+  // Each dispatch is processed fully before the next line runs
+  dispatch({ type: 'AUTH_SET_LOADING', payload: true });  // State: loading=true
+  dispatch({ type: 'AUTH_SET_USER', payload: user });      // State: user=...
+  dispatch({ type: 'AUTH_SET_TOKEN', payload: token });    // State: token=...
+  dispatch({ type: 'AUTH_SET_LOADING', payload: false }); // State: loading=false
+  // 4 separate renders (unless batched)
+
+  // ✅ Better — batch or combine into one action
+  batch(() => {
+    dispatch({ type: 'AUTH_SET_LOADING', payload: true });
+    dispatch({ type: 'AUTH_SET_USER', payload: user });
+    dispatch({ type: 'AUTH_SET_TOKEN', payload: token });
+    dispatch({ type: 'AUTH_SET_LOADING', payload: false });
+  }); // 1 render
+};
+```
+
+---
+
+### Q36 🟡 Medium
+**How does dispatch work differently with Redux-Thunk vs Redux-Saga middleware?**
+
+**Answer:**
+- **Without middleware:** `dispatch` only accepts plain objects
+- **Thunk:** `dispatch` accepts functions; thunk middleware intercepts and calls the function
+- **Saga:** `dispatch` still only accepts plain objects, but Saga middleware watches for specific actions and handles async side effects externally
+
+```typescript
+// Plain Redux — only objects
+dispatch({ type: 'INCREMENT' }); // ✅
+dispatch(() => {});               // ❌ throws without middleware
+
+// With Thunk middleware
+const thunkAction = () => async (dispatch: AppDispatch) => {
+  await api.call();
+  dispatch({ type: 'DONE' });
+};
+dispatch(thunkAction()); // ✅ thunk middleware intercepts the function
+
+// With Saga middleware
+// Saga watches for 'FETCH_REQUEST', so just dispatch the trigger action
+dispatch({ type: 'FETCH_REQUEST', payload: { id: '1' } }); // ✅
+// Saga intercepts, calls API, then dispatches FETCH_SUCCESS
+// Your component code stays clean — no async logic here
+```
+
+---
+
+### Q37 🟡 Medium
+**What happens if you dispatch inside a reducer?**
+
+**Answer:**
+Dispatching inside a reducer is a **critical error**. It causes infinite dispatch loops, state corruption, and Redux will throw a warning ("Reducers may not dispatch actions"). Reducers must be pure and synchronous.
+
+```typescript
+// ❌ NEVER dispatch inside a reducer
+const badReducer = (state = initialState, action: AnyAction) => {
+  if (action.type === 'SOME_ACTION') {
+    store.dispatch({ type: 'ANOTHER_ACTION' }); // ❌ infinite loop!
+    return { ...state };
+  }
+  return state;
+};
+
+// ✅ If you need chained actions, use middleware
+// Thunk approach
+const chainedAction = () => (dispatch: AppDispatch) => {
+  dispatch({ type: 'FIRST_ACTION' });
+  dispatch({ type: 'SECOND_ACTION' });
+};
+
+// Saga approach
+function* watchFirstAction() {
+  yield takeEvery('FIRST_ACTION', function* () {
+    yield put({ type: 'SECOND_ACTION' }); // ✅ safe, outside reducer
+  });
+}
+```
+
+---
+
+### Q38 🟡 Medium
+**How do you type `useDispatch` properly in TypeScript for thunks and sagas?**
+
+**Answer:**
+Create a typed `AppDispatch` from the store type and use it everywhere instead of the default `Dispatch`.
+
+```typescript
+// store/index.ts
+import { createStore, applyMiddleware } from 'redux';
+import createSagaMiddleware from 'redux-saga';
+import rootReducer from './rootReducer';
+
+const sagaMiddleware = createSagaMiddleware();
+const store = createStore(rootReducer, applyMiddleware(sagaMiddleware));
+
+export type RootState = ReturnType<typeof store.getState>;
+export type AppDispatch = typeof store.dispatch;
+
+// hooks/useAppDispatch.ts — typed hook
+import { useDispatch } from 'react-redux';
+export const useAppDispatch = () => useDispatch<AppDispatch>();
+
+// hooks/useAppSelector.ts — typed selector hook
+import { useSelector, TypedUseSelectorHook } from 'react-redux';
+export const useAppSelector: TypedUseSelectorHook<RootState> = useSelector;
+
+// In component — no more type assertions
+const MyComponent = () => {
+  const dispatch = useAppDispatch(); // ✅ fully typed
+  const user = useAppSelector(s => s.auth.user); // ✅ RootState inferred
+};
+```
+
+---
+
+### Q39 🔴 Hard
+**What is "dispatch storm" and how did you handle it in your ERP app?**
+
+**Answer:**
+A dispatch storm is when many rapid dispatches (e.g. from a real-time data stream or scroll event) cause too many re-renders, degrading performance. Solutions: debounce dispatch calls, batch updates, or consolidate actions.
+
+```typescript
+import { useCallback, useRef } from 'react';
+import { useAppDispatch } from '../hooks/useAppDispatch';
+
+// Solution 1: Debounce dispatch
+const useDebounceDispatch = (delay = 300) => {
+  const dispatch = useAppDispatch();
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  return useCallback((action: any) => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      dispatch(action);
+    }, delay);
+  }, [dispatch, delay]);
+};
+
+// Solution 2: Throttle real-time data updates
+// In saga — throttle effect
+function* watchLocationUpdates() {
+  yield throttle(500, 'LOCATION_UPDATE', handleLocationUpdate);
+}
+
+// Solution 3: Batch from real-time WebSocket stream
+const handleWebSocketMessage = (messages: any[]) => {
+  batch(() => {
+    messages.forEach(msg => dispatch({ type: msg.type, payload: msg.data }));
+  });
+};
+```
+
+---
+
+### Q40 🔴 Hard
+**Explain how `useSelector` subscribes to the store. When does it trigger a re-render?**
+
+**Answer:**
+`useSelector` subscribes to the Redux store. After every dispatch, it runs the selector function and compares the result with the previous result using **strict equality (`===`)** by default. If the reference changed, the component re-renders.
+
+```typescript
+import { useSelector, shallowEqual } from 'react-redux';
+
+// ❌ New array reference every render — always re-renders
+const items = useSelector((s: RootState) => s.employees.list.filter(e => e.active));
+
+// ✅ Option 1: Memoized selector with reselect (see Part 06)
+const selectActiveEmployees = createSelector(
+  (s: RootState) => s.employees.list,
+  list => list.filter(e => e.active) // recomputed only if list changes
+);
+const items = useSelector(selectActiveEmployees);
+
+// ✅ Option 2: shallowEqual for object comparison
+const { name, email } = useSelector(
+  (s: RootState) => ({ name: s.auth.user?.name, email: s.auth.user?.email }),
+  shallowEqual // compares object fields, not reference
+);
+
+// ✅ Option 3: Select primitives where possible — never re-creates
+const userName = useSelector((s: RootState) => s.auth.user?.name); // string comparison
+const isLoading = useSelector((s: RootState) => s.employees.loading); // boolean comparison
+```
+
+---
+
+## E. combineReducers
+
+---
+
+### Q41 🟢 Easy
+**What is `combineReducers` and what state shape does it create?**
+
+**Answer:**
+`combineReducers` merges multiple reducers into one root reducer. The key names in the passed object become the top-level keys of the state tree.
+
+```typescript
+import { combineReducers } from 'redux';
+
+const rootReducer = combineReducers({
+  auth:       authReducer,      // → state.auth
+  employees:  employeeReducer,  // → state.employees
+  attendance: attendanceReducer,// → state.attendance
+  payroll:    payrollReducer,   // → state.payroll
+  ui:         uiReducer,        // → state.ui
+});
+
+// Resulting state shape:
+/*
+{
+  auth: { user: null, token: null, loading: false },
+  employees: { list: [], loading: false, error: null },
+  attendance: { records: [], selectedDate: null },
+  payroll: { data: [], processed: false },
+  ui: { theme: 'light', activeTab: 'dashboard' }
+}
+*/
+
+export type RootState = ReturnType<typeof rootReducer>;
+```
+
+---
+
+### Q42 🟢 Easy
+**Does `combineReducers` create a deep merge or shallow merge of slices?**
+
+**Answer:**
+Shallow merge only. Each key in the object you pass to `combineReducers` maps to a top-level state slice. Each reducer is 100% responsible for its own slice — `combineReducers` never merges nested state across reducers.
+
+```typescript
+// Each reducer manages ONLY its own slice
+const rootReducer = combineReducers({
+  auth: authReducer,        // auth reducer CANNOT touch state.employees
+  employees: employeeReducer, // employee reducer CANNOT touch state.auth
+});
+
+// ✅ auth reducer
+const authReducer = (state = authInit, action: AnyAction) => {
+  // `state` here is ONLY state.auth, not the full state
+  switch (action.type) {
+    case 'LOGIN_SUCCESS': return { ...state, user: action.payload };
+    default: return state;
+  }
+};
+
+// To share state between slices, use:
+// 1. Selectors (read only)
+// 2. Sagas that dispatch multiple actions
+// 3. Root reducer wrapper
+```
+
+---
+
+### Q43 🟢 Easy
+**What warning does Redux log when a slice returns `undefined`?**
+
+**Answer:**
+Redux logs: *"Reducer [key] returned undefined during initialization."* This happens when a reducer doesn't have a default value for its state parameter. Always provide `initialState` as the default parameter.
+
+```typescript
+// ❌ Causes warning — no default state
+const badReducer = (state: any, action: AnyAction) => {
+  return state; // undefined on first call → warning
+};
+
+// ✅ Always provide initialState
+interface AuthState { user: null | User; token: null | string }
+const initialState: AuthState = { user: null, token: null };
+
+const authReducer = (state: AuthState = initialState, action: AnyAction): AuthState => {
+  return state;
+};
+```
+
+---
+
+### Q44 🟡 Medium
+**How do you nest `combineReducers` for a large feature-based app?**
+
+**Answer:**
+You can nest `combineReducers` calls. Each feature can have its own combined reducer, and these are composed into the root.
+
+```typescript
+// features/hrms/reducer.ts
+const hrmsReducer = combineReducers({
+  employees:  employeeReducer,
+  attendance: attendanceReducer,
+  leaves:     leaveReducer,
+  payroll:    payrollReducer,
+});
+
+// features/crm/reducer.ts
+const crmReducer = combineReducers({
+  leads:    leadReducer,
+  contacts: contactReducer,
+  deals:    dealReducer,
+});
+
+// features/inventory/reducer.ts
+const inventoryReducer = combineReducers({
+  items:    itemReducer,
+  stock:    stockReducer,
+  orders:   orderReducer,
+});
+
+// rootReducer.ts
+const rootReducer = combineReducers({
+  hrms:      hrmsReducer,      // → state.hrms.employees, state.hrms.attendance
+  crm:       crmReducer,       // → state.crm.leads
+  inventory: inventoryReducer, // → state.inventory.items
+  auth:      authReducer,
+  ui:        uiReducer,
+});
+
+// Access nested state
+const employees = useAppSelector(s => s.hrms.employees.list);
+const leads = useAppSelector(s => s.crm.leads.list);
+```
+
+---
+
+### Q45 🟡 Medium
+**How do you replace a slice reducer dynamically (code splitting in React Native)?**
+
+**Answer:**
+Use `store.replaceReducer`. This is useful for lazy-loading feature reducers only when needed — reducing initial bundle size.
+
+```typescript
+// store/index.ts
+const staticReducers = {
+  auth: authReducer,
+  ui:   uiReducer,
+};
+
+const createRootReducer = (asyncReducers = {}) =>
+  combineReducers({ ...staticReducers, ...asyncReducers });
+
+const store = createStore(createRootReducer());
+
+// Attach new reducer dynamically when a feature loads
+export const injectReducer = (key: string, reducer: Reducer) => {
+  if ((store as any).asyncReducers[key]) return; // already injected
+  (store as any).asyncReducers[key] = reducer;
+  store.replaceReducer(createRootReducer((store as any).asyncReducers));
+};
+
+// Usage — in lazy-loaded Inventory screen
+import { injectReducer } from '../../store';
+import inventoryReducer from './reducer';
+
+const InventoryModule = () => {
+  useEffect(() => {
+    injectReducer('inventory', inventoryReducer); // loaded on demand
+  }, []);
+  // ...
+};
+```
+
+---
+
+### Q46 🟡 Medium
+**Can two slices from `combineReducers` communicate with each other?**
+
+**Answer:**
+Reducers cannot directly access sibling slices. They only receive their own slice as `state`. To coordinate between slices use: selectors (read), sagas (write side effects), or a root reducer wrapper.
+
+```typescript
+// ❌ IMPOSSIBLE inside reducer — employee reducer cannot see auth state
+const employeeReducer = (state = empInit, action: AnyAction) => {
+  // `state` is ONLY state.employees, not RootState
+  // Cannot do: if (rootState.auth.user.role === 'admin') ...
+};
+
+// ✅ Saga can access full state
+function* fetchEmployeesSaga() {
+  const userRole: string = yield select((s: RootState) => s.auth.user?.role);
+
+  if (userRole === 'admin') {
+    yield call(api.getAllEmployees);
+  } else {
+    yield call(api.getMyTeam);
+  }
+}
+
+// ✅ Selector composes across slices (read-only)
+const selectCanEditPayroll = createSelector(
+  (s: RootState) => s.auth.user?.role,
+  (s: RootState) => s.payroll.isLocked,
+  (role, isLocked) => role === 'admin' && !isLocked
+);
+```
+
+---
+
+### Q47 🔴 Hard
+**What is the performance implication of `combineReducers` calling all reducers on every dispatch?**
+
+**Answer:**
+Every dispatch calls ALL reducers, even if they don't handle that action type. For 20+ slices, this means 20 function calls per dispatch. This is generally fast (pure functions, no I/O), but can be a concern for:
+- Very high-frequency dispatches (real-time, scroll events)
+- Reducers with expensive computations in their default case
+
+```typescript
+// ✅ Default case must be O(1) — just return state
+const goodReducer = (state = init, action: AnyAction) => {
+  switch (action.type) {
+    case 'MY_ACTION': return { ...state, value: action.payload };
+    default: return state; // ✅ O(1) reference return — free
+  }
+};
+
+// ❌ Expensive default case — runs on EVERY dispatch in the app
+const badReducer = (state = init, action: AnyAction) => {
+  switch (action.type) {
+    case 'MY_ACTION': return { ...state };
+    default:
+      // ❌ This expensive logic runs on every dispatch everywhere!
+      return { ...state, computed: heavyComputation(state.items) };
+  }
+};
+
+// Move heavy computation to selectors (memoized) — see Part 06
+const selectComputed = createSelector(
+  (s: RootState) => s.mySlice.items,
+  items => heavyComputation(items) // runs only when items change
+);
+```
+
+---
+
+### Q48 🔴 Hard
+**How do you add TypeScript type safety to `combineReducers` so `RootState` is always accurate?**
+
+**Answer:**
+Derive `RootState` from `ReturnType<typeof rootReducer>` — TypeScript infers it automatically. Never write the type manually.
+
+```typescript
+// rootReducer.ts
+import { combineReducers } from 'redux';
+
+const rootReducer = combineReducers({
+  auth:       authReducer,
+  employees:  employeeReducer,
+  attendance: attendanceReducer,
+  payroll:    payrollReducer,
+  ui:         uiReducer,
+});
+
+// ✅ Auto-inferred — always in sync with actual reducers
+export type RootState = ReturnType<typeof rootReducer>;
+
+// RootState is:
+// {
+//   auth: AuthState,
+//   employees: EmployeeState,
+//   attendance: AttendanceState,
+//   payroll: PayrollState,
+//   ui: UiState
+// }
+
+// Typed selector — full autocomplete in VS Code
+const selectUserRole = (state: RootState) => state.auth.user?.role;
+
+// Typed useSelector hook
+export const useAppSelector: TypedUseSelectorHook<RootState> = useSelector;
+
+// Usage — no type assertions needed
+const role = useAppSelector(s => s.auth.user?.role); // TS knows type
+```
+
+---
+
+## F. Immutability
+
+---
+
+### Q49 🟢 Easy
+**Why is immutability important in Redux?**
+
+**Answer:**
+Redux relies on reference equality checks to detect state changes. If you mutate state in-place, the reference stays the same, Redux thinks nothing changed, and `useSelector` won't trigger re-renders.
+
+```typescript
+// ❌ Mutation — React WILL NOT re-render
+const badReducer = (state = { count: 0 }, action: AnyAction) => {
+  if (action.type === 'INCREMENT') {
+    state.count++; // ❌ same reference
+    return state;  // === previous state → no re-render
+  }
+  return state;
+};
+
+// ✅ New reference — React WILL re-render
+const goodReducer = (state = { count: 0 }, action: AnyAction) => {
+  if (action.type === 'INCREMENT') {
+    return { ...state, count: state.count + 1 }; // new object
+  }
+  return state;
+};
+```
+
+---
+
+### Q50 🟢 Easy
+**What are the common immutable update patterns in JavaScript?**
+
+**Answer:**
+
+```typescript
+const state = {
+  user: { name: 'Devesh', age: 25 },
+  skills: ['React Native', 'Redux'],
+  meta: { active: true }
+};
+
+// Update top-level property
+const s1 = { ...state, meta: { ...state.meta, active: false } };
+
+// Add to array
+const s2 = { ...state, skills: [...state.skills, 'TypeScript'] };
+
+// Remove from array
+const s3 = { ...state, skills: state.skills.filter(s => s !== 'Redux') };
+
+// Update item in array
+const s4 = {
+  ...state,
+  skills: state.skills.map(s => s === 'Redux' ? 'Redux Saga' : s)
+};
+
+// Update nested object in array
+interface Employee { id: string; salary: number }
+const employees: Employee[] = [{ id: '1', salary: 50000 }];
+
+const updatedEmployees = employees.map(emp =>
+  emp.id === '1' ? { ...emp, salary: 60000 } : emp
+);
+
+// Delete key from object
+const { user, ...withoutUser } = state; // removes user key
+```
+
+---
+
+### Q51 🟡 Medium
+**What is `immer` and how does it help with deeply nested immutable updates?**
+
+**Answer:**
+`immer` lets you write "mutating" code that actually produces a new immutable state via a structural clone (Proxy). Redux Toolkit uses immer by default inside `createSlice` reducers.
+
+```typescript
+import produce from 'immer';
+
+interface AppState {
+  employees: {
+    byId: Record<string, { name: string; address: { city: string } }>;
+  };
+}
+
+const state: AppState = {
+  employees: {
+    byId: { e1: { name: 'Devesh', address: { city: 'Delhi' } } },
+  },
+};
+
+// ❌ Without immer — verbose for deep nesting
+const newState = {
+  ...state,
+  employees: {
+    ...state.employees,
+    byId: {
+      ...state.employees.byId,
+      e1: {
+        ...state.employees.byId.e1,
+        address: {
+          ...state.employees.byId.e1.address,
+          city: 'Noida',
+        },
+      },
+    },
+  },
+};
+
+// ✅ With immer — reads like mutation, produces immutable state
+const newStateImmer = produce(state, draft => {
+  draft.employees.byId.e1.address.city = 'Noida'; // safe
+});
+
+// In RTK createSlice (immer built-in)
+const employeeSlice = createSlice({
+  name: 'employees',
+  initialState,
+  reducers: {
+    updateCity: (state, action) => {
+      state.byId[action.payload.id].address.city = action.payload.city; // ✅ immer
+    },
+  },
+});
+```
+
+---
+
+### Q52 🟡 Medium
+**How do you detect accidental mutations in Redux during development?**
+
+**Answer:**
+Use `redux-immutable-state-invariant` middleware in development. It freezes state objects using `Object.freeze` and throws if any mutation is detected.
+
+```typescript
+import { createStore, applyMiddleware } from 'redux';
+
+const getMiddleware = () => {
+  if (__DEV__) {
+    // Only in development — adds overhead
+    const { default: immutableStateInvariant } = require('redux-immutable-state-invariant');
+    return applyMiddleware(immutableStateInvariant(), sagaMiddleware);
+  }
+  return applyMiddleware(sagaMiddleware);
+};
+
+const store = createStore(rootReducer, getMiddleware());
+
+// Now if you accidentally mutate state in a reducer:
+// ❌ state.items.push(item)
+// → Redux throws: "A state mutation was detected..."
+// → Points to exact action type that caused the mutation
+```
+
+---
+
+### Q53 🔴 Hard
+**What is structural sharing in immutable state updates and why does it matter for memory?**
+
+**Answer:**
+When you spread state (`{ ...state, x: newX }`), unchanged parts still reference the same objects in memory — they aren't copied. Only the changed subtrees are new. This is structural sharing. It makes immutable updates memory-efficient.
+
+```typescript
+const state = {
+  auth:      { user: 'Devesh' },    // ref: 0x001
+  employees: { list: [] },           // ref: 0x002
+  ui:        { theme: 'dark' },      // ref: 0x003
+};
+
+// Dispatch: update only auth.user
+const newState = {
+  ...state,
+  auth: { ...state.auth, user: 'Rahul' }, // new ref: 0x004
+};
+
+// Memory layout after update:
+// newState.auth      → 0x004 (new object — changed)
+// newState.employees → 0x002 (SAME reference — not copied!)
+// newState.ui        → 0x003 (SAME reference — not copied!)
+
+// useSelector benefits:
+// Components subscribed to state.employees will NOT re-render
+// because the reference is identical (0x002 === 0x002)
+console.log(newState.employees === state.employees); // true ✅
+console.log(newState.auth === state.auth);           // false ✅
+```
+
+---
+
+### Q54 🔴 Hard
+**When does spreading state (`{ ...state }`) fail to create proper immutability? Give a real example.**
+
+**Answer:**
+The spread operator is **shallow**. It only copies top-level keys. Nested arrays and objects still share the same reference. Mutating a nested property mutates both the old and new state.
+
+```typescript
+const state = {
+  employees: {
+    list: [{ id: '1', skills: ['React', 'Redux'] }]
+  }
+};
+
+// ❌ Shallow spread — appears immutable but isn't
+const newState = { ...state };
+newState.employees.list[0].skills.push('TypeScript'); // ❌ mutates state AND newState!
+
+// Because:
+console.log(newState.employees === state.employees); // true — SAME reference
+console.log(newState.employees.list === state.employees.list); // true — SAME reference
+
+// ✅ Must spread every modified level
+const correctState = {
+  ...state,
+  employees: {
+    ...state.employees,
+    list: state.employees.list.map(emp =>
+      emp.id === '1'
+        ? { ...emp, skills: [...emp.skills, 'TypeScript'] } // new array
+        : emp
+    ),
+  },
+};
+
+// Or use immer for deep nesting (see Q51)
+```
+
+---
+
+## G. State Shape Design
+
+---
+
+### Q55 🟡 Medium
+**What are the principles of good Redux state shape design?**
+
+**Answer:**
+1. **Flat, not nested** — avoid deeply nested objects
+2. **Normalize collections** — use `byId` + `allIds` for lists
+3. **Separate UI state from domain data** — don't mix server data with loading flags in the same object
+4. **Avoid redundant derived state** — compute from existing state via selectors
+5. **Mirror API response shape minimally** — transform to what UI needs
+
+```typescript
+// ❌ Poor shape — deeply nested, redundant derived data
+{
+  data: {
+    employees: {
+      allEmployees: {
+        employeesList: Employee[],
+        totalCount: number, // ❌ derived — count of list
+        isLoading: boolean,
+        hasError: boolean,
+        errorMessage: string
+      }
+    }
+  }
+}
+
+// ✅ Good shape — flat, normalized, clean
+{
+  employees: {
+    byId: Record<string, Employee>,
+    allIds: string[],
+    status: 'idle' | 'loading' | 'succeeded' | 'failed',
+    error: string | null
+  }
+}
+// totalCount → employees.allIds.length (derived via selector)
+```
+
+---
+
+### Q56 🟡 Medium
+**How do you design Redux state for a multi-module ERP app (HRMS + CRM + Inventory)?**
+
+**Answer:**
+
+```typescript
+// state shape for Qurilo-style ERP
+interface RootState {
+  // Auth — small, always loaded
+  auth: {
+    user: User | null;
+    token: string | null;
+    permissions: string[];
+    status: AsyncStatus;
+  };
+
+  // HRMS module
+  employees: {
+    byId: Record<string, Employee>;
+    allIds: string[];
+    status: AsyncStatus;
+    selectedId: string | null;
+  };
+  attendance: {
+    records: AttendanceRecord[];
+    selectedDate: string;
+    status: AsyncStatus;
+  };
+  payroll: {
+    byEmployeeId: Record<string, PayrollEntry>;
+    processedMonth: string | null;
+    status: AsyncStatus;
+  };
+
+  // CRM module
+  leads: {
+    byId: Record<string, Lead>;
+    allIds: string[];
+    filters: LeadFilters;
+    status: AsyncStatus;
+  };
+
+  // Inventory
+  inventory: {
+    items: Record<string, Item>;
+    lowStockAlerts: string[]; // item ids
+    status: AsyncStatus;
+  };
+
+  // UI state — NOT persisted
+  ui: {
+    activeModule: 'hrms' | 'crm' | 'inventory';
+    sidebarOpen: boolean;
+    theme: 'light' | 'dark';
+    toasts: Toast[];
+  };
+}
+```
+
+---
+
+### Q57 🟡 Medium
+**How do you handle pagination state in Redux?**
+
+**Answer:**
+
+```typescript
+interface PaginatedState<T> {
+  byId: Record<string, T>;
+  allIds: string[];
+  pagination: {
+    currentPage: number;
+    totalPages: number;
+    pageSize: number;
+    totalCount: number;
+    hasNextPage: boolean;
+  };
+  status: AsyncStatus;
+  error: string | null;
+}
+
+const initialEmployeeState: PaginatedState<Employee> = {
+  byId: {},
+  allIds: [],
+  pagination: {
+    currentPage: 1,
+    totalPages: 0,
+    pageSize: 20,
+    totalCount: 0,
+    hasNextPage: false,
+  },
+  status: 'idle',
+  error: null,
+};
+
+// Reducer
+case 'FETCH_EMPLOYEES_PAGE_SUCCESS':
+  const { items, totalCount, currentPage, pageSize } = action.payload;
+  const newById = { ...state.byId };
+  const newAllIds = [...state.allIds];
+
+  items.forEach((emp: Employee) => {
+    if (!newById[emp.id]) {
+      newById[emp.id] = emp;
+      newAllIds.push(emp.id);
+    }
+  });
+
+  return {
+    ...state,
+    byId: newById,
+    allIds: newAllIds,
+    status: 'succeeded',
+    pagination: {
+      currentPage,
+      pageSize,
+      totalCount,
+      totalPages: Math.ceil(totalCount / pageSize),
+      hasNextPage: currentPage * pageSize < totalCount,
+    },
+  };
+```
+
+---
+
+### Q58 🔴 Hard
+**How do you design state for an offline-first React Native app with sync capabilities?**
+
+**Answer:**
+
+```typescript
+interface SyncableEntity<T> {
+  data: T;
+  syncStatus: 'synced' | 'pending' | 'conflict' | 'error';
+  localUpdatedAt: number;
+  serverUpdatedAt: number | null;
+  pendingOperation: 'create' | 'update' | 'delete' | null;
+}
+
+interface OfflineState {
+  attendance: {
+    byId: Record<string, SyncableEntity<AttendanceRecord>>;
+    allIds: string[];
+    pendingSyncIds: string[];     // IDs waiting to sync
+    lastSyncedAt: number | null;
+    isOnline: boolean;
+  };
+}
+
+// Actions for offline-first
+const offlineReducer = (state = offlineInit, action: AnyAction) => {
+  switch (action.type) {
+    // Local operation — save immediately, mark pending
+    case 'CHECK_IN_LOCAL':
+      return {
+        ...state,
+        byId: {
+          ...state.byId,
+          [action.payload.id]: {
+            data: action.payload,
+            syncStatus: 'pending',
+            localUpdatedAt: Date.now(),
+            serverUpdatedAt: null,
+            pendingOperation: 'create',
+          },
+        },
+        allIds: [...state.allIds, action.payload.id],
+        pendingSyncIds: [...state.pendingSyncIds, action.payload.id],
+      };
+
+    // After successful sync
+    case 'SYNC_SUCCESS':
+      return {
+        ...state,
+        byId: {
+          ...state.byId,
+          [action.payload.id]: {
+            ...state.byId[action.payload.id],
+            syncStatus: 'synced',
+            serverUpdatedAt: action.payload.serverTimestamp,
+            pendingOperation: null,
+          },
+        },
+        pendingSyncIds: state.pendingSyncIds.filter(id => id !== action.payload.id),
+        lastSyncedAt: Date.now(),
+      };
+
+    default:
+      return state;
+  }
+};
+```
+
+---
+
+### Q59 🔴 Hard
+**What data should NOT go into Redux state? Give a decision framework.**
+
+**Answer:**
+Not all state belongs in Redux. Use this decision framework:
+
+```typescript
+// Decision: Is this data shared across multiple unrelated components?
+// Decision: Does this data need to persist across navigation?
+// Decision: Does this data need time-travel/DevTools debugging?
+
+// ❌ Keep OUT of Redux:
+// 1. Form state (local until submit)
+const FormExample = () => {
+  const [name, setName] = useState(''); // ✅ local state
+};
+
+// 2. UI-only transient state
+const [isDropdownOpen, setDropdownOpen] = useState(false); // ✅ component state
+
+// 3. Server cache (use React Query / SWR instead)
+// const { data } = useQuery('employees', fetchEmployees); // ✅ react-query
+
+// 4. Refs / DOM state
+const scrollRef = useRef(null); // ✅ useRef
+
+// ✅ PUT in Redux:
+// 1. Auth state — needed everywhere
+// 2. User permissions — drives feature visibility app-wide
+// 3. Feature data shared by 3+ unrelated screens (Employee list)
+// 4. State that needs to survive screen unmount (wizard multi-step)
+// 5. Real-time data updates from WebSocket
+// 6. Offline queue / sync state
+
+// Rule of thumb:
+// Component state → useState
+// Cross-component in same tree → Context or prop drill
+// Cross-screen / global → Redux
+// Server data with caching → React Query
+```
+
+---
+
+### Q60 🔴 Hard
+**How did you design the Redux state for your Debt Relief India fintech app? Walk through key decisions.**
+
+**Answer:**
+This is a behavioural + technical hybrid. Connect your real experience with state design principles.
+
+```typescript
+// Debt Relief India — state architecture
+interface DebtReliefRootState {
+  // Auth & KYC — security-sensitive, encrypted in storage
+  auth: {
+    user: User | null;
+    token: string | null;         // never log, never display
+    kycStatus: 'pending' | 'submitted' | 'verified' | 'rejected';
+    sessionExpiresAt: number | null;
+    status: AsyncStatus;
+  };
+
+  // Loan data — core domain
+  loans: {
+    byId: Record<string, Loan>;
+    allIds: string[];
+    activeLoanId: string | null;  // currently viewed loan
+    status: AsyncStatus;
+  };
+
+  // EMI/Repayment — financial data, needs accuracy
+  repayment: {
+    schedule: EMIEntry[];
+    nextDueDate: string | null;
+    overdueAmount: number;
+    totalOutstanding: number;     // derived on server, not recomputed client-side
+    status: AsyncStatus;
+  };
+
+  // Payment flow — transient, cleared after success/failure
+  payment: {
+    currentTransaction: {
+      amount: number;
+      loanId: string;
+      razorpayOrderId: string | null;
+      method: 'upi' | 'card' | 'netbanking' | null;
+    } | null;
+    history: PaymentRecord[];
+    status: AsyncStatus;
+    error: string | null;
+  };
+
+  // Documents — KYC uploads
+  documents: {
+    byType: Record<'aadhaar' | 'pan' | 'bankStatement', DocumentEntry | null>;
+    uploadStatus: Record<string, AsyncStatus>;
+  };
+
+  // UI — not persisted
+  ui: {
+    activeTab: 'home' | 'emi' | 'documents' | 'profile';
+    biometricEnabled: boolean;
+    notificationBadge: number;
+  };
+}
+
+// Key design decisions:
+// 1. payment.currentTransaction → cleared on success/failure (no stale payment state)
+// 2. totalOutstanding → trust server value, don't derive client-side (compliance)
+// 3. token → stored encrypted in AsyncStorage, NOT plain in Redux persist
+// 4. kycStatus → drives entire app navigation flow (onboarding vs main app)
+```
+
+---
+
+## ✅ Progress Checklist
+
+- [ ] Section A: Store & Setup (Q1–Q10)
+- [ ] Section B: Actions & Action Creators (Q11–Q20)
+- [ ] Section C: Reducers & Pure Functions (Q21–Q32)
+- [ ] Section D: Dispatch & Data Flow (Q33–Q40)
+- [ ] Section E: combineReducers (Q41–Q48)
+- [ ] Section F: Immutability (Q49–Q54)
+- [ ] Section G: State Shape Design (Q55–Q60)
+
+---
+
+## 🔗 Next File
+
+👉 [`02-redux-saga.md`](./02-redux-saga.md) — 100 Questions on Effects, Workers, Watchers, Channels & Error Handling
+
+---
+
+*Part 03 · Redux Fundamentals · 60/500 Questions · Devesh Kumar Singh*
